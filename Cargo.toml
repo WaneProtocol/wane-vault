@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ivza-core",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/ivza-protocol/ivza"
+
+[workspace.dependencies]
+solana-sdk = "1.18"
+solana-program = "1.18"
+borsh = "1.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+petgraph = "0.6"
