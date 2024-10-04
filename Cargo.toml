@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/ivza-core",
+    "crates/ivza-solver",
 ]
 
 [workspace.package]
@@ -11,7 +12,10 @@ license = "MIT"
 repository = "https://github.com/ivza-protocol/ivza"
 
 [workspace.dependencies]
+ivza-core = { path = "crates/ivza-core" }
+ivza-solver = { path = "crates/ivza-solver" }
 solana-sdk = "1.18"
+solana-client = "1.18"
 solana-program = "1.18"
 borsh = "1.5"
 serde = { version = "1.0", features = ["derive"] }
@@ -22,3 +26,9 @@ tokio = { version = "1.0", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 petgraph = "0.6"
+dashmap = "6.0"
+crossbeam-channel = "0.5"
+rayon = "1.10"
+bs58 = "0.5"
+base64 = "0.22"
+sha2 = "0.10"
