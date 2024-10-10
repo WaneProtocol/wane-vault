@@ -148,4 +148,109 @@ impl CriticalPathAnalyzer {
         // Project finish time is the max earliest finish.
         let makespan = earliest_finish.values().copied().fold(0.0_f64, f64::max);
 
-        
+        // Backward pass: compute latest start and finish.
+        let mut latest_start: HashMap<NodeId, f64> = HashMap::new();
+        let mut latest_finish: HashMap<NodeId, f64> = HashMap::new();
+
+        for &node_id in topo_order.iter().rev() {
+            let succs = graph.successors(node_id);
+            let lf = if succs.is_empty() {
+                makespan
+            } else {
+                succs
+                    .iter()
+                    .map(|&s| latest_start.get(&s).copied().unwrap_or(makespan))
+                    .fold(f64::MAX, f64::min)
+            };
+            let dur = durations[&node_id];
+            latest_finish.insert(node_id, lf);
+            latest_start.insert(node_id, lf - dur);
+        }
+
+        // Compute slack and build timings.
+        let mut timings: HashMap<NodeId, NodeTiming> = HashMap::new();
+        for &node_id in &topo_order {
+            let es = earliest_start[&node_id];
+            let ef = earliest_finish[&node_id];
+            let ls = latest_start[&node_id];
+            let lf = latest_finish[&node_id];
+            let slack = ls - es;
+
+            timings.insert(
+                node_id,
+                NodeTiming {
+                    node_id,
+                    earliest_start: es,
+                    earliest_finish: ef,
+                    latest_start: ls,
+                    latest_finish: lf,
+                    slack,
+                    duration: durations[&node_id],
+                },
+            );
+
+            debug!(
+                "Node {}: ES={:.0}, EF={:.0}, LS={:.0}, LF={:.0}, slack={:.0}",
+                node_id, es, ef, ls, lf, slack
+            );
+        }
+
+        // Extract the critical path (nodes with zero slack), in topological order.
+        let critical_path: Vec<NodeId> = topo_order
+            .iter()
+            .filter(|&&id| timings[&id].is_critical())
+            .copied()
+            .collect();
+
+        let critical_cu: u64 = critical_path
+            .iter()
+            .filter_map(|id| graph.nodes.get(id))
+            .map(|n| n.estimated_cu)
+            .sum();
+
+        info!(
+            "Critical path: {} nodes, makespan={:.0}, critical_cu={}",
+            critical_path.len(),
+            makespan,
+            critical_cu
+        );
+
+        Ok(CriticalPathResult {
+            timings,
+            critical_path,
+            makespan,
+            critical_cu,
+        })
+    }
+
+    /// Compute the depth (longest path from any root) for each node.
+    pub fn compute_depths(&self, graph: &TransactionGraph) -> Result<HashMap<NodeId, u32>> {
+        let topo_order = graph
+            .topological_sort()
+            .ok_or_else(|| anyhow!("Graph has a cycle"))?;
+
+        let mut depths: HashMap<NodeId, u32> = HashMap::new();
+
+        for &node_id in &topo_order {
+            let preds = graph.predecessors(node_id);
+            let depth = if preds.is_empty() {
+                0
+            } else {
+                preds
+                    .iter()
+                    .map(|&p| depths.get(&p).copied().unwrap_or(0) + 1)
+                    .max()
+                    .unwrap_or(0)
+            };
+            depths.insert(node_id, depth);
+        }
+
+        Ok(depths)
+    }
+}
+
+impl Default for CriticalPathAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
