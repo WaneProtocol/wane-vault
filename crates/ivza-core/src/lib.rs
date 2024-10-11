@@ -2,4 +2,5 @@
 
 pub mod analyzer;
 pub mod graph;
+pub mod scheduler;
 pub mod types;
