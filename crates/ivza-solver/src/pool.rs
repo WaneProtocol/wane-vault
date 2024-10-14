@@ -654,3 +654,358 @@ impl PoolGraph {
 }
 
 // ---------------------------------------------------------------------------
+// Pool registry
+// ---------------------------------------------------------------------------
+
+/// Thread-safe registry of known liquidity pools.
+pub struct PoolRegistry {
+    /// Pools keyed by their on-chain address.
+    pools: DashMap<Pubkey, PoolInfo>,
+    /// Index: (token_a, token_b) -> list of pool addresses.
+    pair_index: DashMap<(Pubkey, Pubkey), Vec<Pubkey>>,
+    /// Index: token -> list of pool addresses that include this token.
+    token_index: DashMap<Pubkey, Vec<Pubkey>>,
+}
+
+impl PoolRegistry {
+    pub fn new() -> Self {
+        Self {
+            pools: DashMap::new(),
+            pair_index: DashMap::new(),
+            token_index: DashMap::new(),
+        }
+    }
+
+    /// Register a pool in the registry.
+    pub fn register(&self, pool: PoolInfo) {
+        let addr = pool.address;
+        let pair = pool.token_pair();
+
+        self.pair_index.entry(pair).or_default().push(addr);
+        self.token_index
+            .entry(pool.token_a)
+            .or_default()
+            .push(addr);
+        self.token_index
+            .entry(pool.token_b)
+            .or_default()
+            .push(addr);
+
+        debug!("Registered pool {} for pair {:?}", addr, pair);
+        self.pools.insert(addr, pool);
+    }
+
+    /// Retrieve a pool by address.
+    pub fn get(&self, address: &Pubkey) -> Option<PoolInfo> {
+        self.pools.get(address).map(|r| r.value().clone())
+    }
+
+    /// Find all pools for a given token pair (order-independent).
+    pub fn pools_for_pair(&self, token_a: &Pubkey, token_b: &Pubkey) -> Vec<PoolInfo> {
+        let pair = if *token_a < *token_b {
+            (*token_a, *token_b)
+        } else {
+            (*token_b, *token_a)
+        };
+
+        self.pair_index
+            .get(&pair)
+            .map(|addrs| {
+                addrs
+                    .iter()
+                    .filter_map(|addr| self.pools.get(addr).map(|r| r.value().clone()))
+                    .filter(|p| p.is_active)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Find all pools that include a given token.
+    pub fn pools_for_token(&self, token: &Pubkey) -> Vec<PoolInfo> {
+        self.token_index
+            .get(token)
+            .map(|addrs| {
+                addrs
+                    .iter()
+                    .filter_map(|addr| self.pools.get(addr).map(|r| r.value().clone()))
+                    .filter(|p| p.is_active)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Build a PoolGraph from all registered pools.
+    pub fn build_graph(&self) -> PoolGraph {
+        let mut graph = PoolGraph::new();
+        for entry in self.pools.iter() {
+            let pool = entry.value();
+            if pool.is_active {
+                graph.add_pool(pool);
+            }
+        }
+        info!(
+            "Built pool graph: {} tokens, {} edges",
+            graph.token_count(),
+            graph.edge_count()
+        );
+        graph
+    }
+
+    /// Total number of registered pools.
+    pub fn pool_count(&self) -> usize {
+        self.pools.len()
+    }
+
+    /// Total number of known tokens.
+    pub fn token_count(&self) -> usize {
+        self.token_index.len()
+    }
+
+    /// Update pool reserves (e.g., after fetching new on-chain data).
+    pub fn update_reserves(
+        &self,
+        address: &Pubkey,
+        reserve_a: u64,
+        reserve_b: u64,
+    ) -> Result<()> {
+        let mut entry = self
+            .pools
+            .get_mut(address)
+            .ok_or_else(|| anyhow!("Pool {} not found in registry", address))?;
+        entry.reserve_a = reserve_a;
+        entry.reserve_b = reserve_b;
+        Ok(())
+    }
+
+    /// Deactivate a pool.
+    pub fn deactivate(&self, address: &Pubkey) -> Result<()> {
+        let mut entry = self
+            .pools
+            .get_mut(address)
+            .ok_or_else(|| anyhow!("Pool {} not found in registry", address))?;
+        entry.is_active = false;
+        warn!("Deactivated pool {}", address);
+        Ok(())
+    }
+}
+
+impl Default for PoolRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pool fetcher (simulated on-chain data)
+// ---------------------------------------------------------------------------
+
+/// Simulated pool data fetcher.  In production this would decode on-chain
+/// account data via `solana_client::rpc_client`.  Here it produces
+/// deterministic pools from well-known program addresses.
+pub struct PoolFetcher {
+    /// Known AMM program IDs to scan.
+    pub amm_programs: Vec<Pubkey>,
+}
+
+impl PoolFetcher {
+    pub fn new() -> Self {
+        Self {
+            amm_programs: Vec::new(),
+        }
+    }
+
+    pub fn with_program(mut self, program: Pubkey) -> Self {
+        self.amm_programs.push(program);
+        self
+    }
+
+    /// Simulate fetching pools.  Returns a set of realistic-looking pools.
+    pub fn fetch_pools(&self, token_mints: &[Pubkey]) -> Vec<PoolInfo> {
+        let mut pools = Vec::new();
+        let base_fee = 30u16; // 0.30%
+
+        // Create pools between consecutive token pairs and connect them.
+        for window in token_mints.windows(2) {
+            let token_a = window[0];
+            let token_b = window[1];
+
+            // Derive a deterministic pool address from the two tokens.
+            let pool_bytes: Vec<u8> = token_a
+                .to_bytes()
+                .iter()
+                .zip(token_b.to_bytes().iter())
+                .map(|(a, b)| a ^ b)
+                .collect();
+            let mut addr_bytes = [0u8; 32];
+            for (i, &b) in pool_bytes.iter().enumerate().take(32) {
+                addr_bytes[i] = b;
+            }
+            let pool_address = Pubkey::new_from_array(addr_bytes);
+
+            // Simulate reserves based on the pool address bytes to get variety.
+            let reserve_scale = (addr_bytes[0] as u64 + 1) * 1_000_000;
+            let reserve_a = reserve_scale * 1_000;
+            let reserve_b = reserve_scale * 800;
+
+            pools.push(PoolInfo::constant_product(
+                pool_address,
+                token_a,
+                token_b,
+                reserve_a,
+                reserve_b,
+                base_fee,
+            ));
+        }
+
+        // If there are at least 3 tokens, also create a "shortcut" pool from first to last.
+        if token_mints.len() >= 3 {
+            let first = token_mints[0];
+            let last = *token_mints.last().unwrap();
+
+            let mut addr_bytes = [0u8; 32];
+            for (i, (&a, &b)) in first
+                .to_bytes()
+                .iter()
+                .zip(last.to_bytes().iter())
+                .enumerate()
+            {
+                addr_bytes[i] = a.wrapping_add(b);
+            }
+            let pool_address = Pubkey::new_from_array(addr_bytes);
+
+            pools.push(PoolInfo::constant_product(
+                pool_address,
+                first,
+                last,
+                500_000_000,
+                400_000_000,
+                25,
+            ));
+        }
+
+        info!("Fetched {} simulated pools", pools.len());
+        pools
+    }
+}
+
+impl Default for PoolFetcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_pubkey(seed: u8) -> Pubkey {
+        Pubkey::new_from_array([seed; 32])
+    }
+
+    #[test]
+    fn test_constant_product_output() {
+        // 1000 * 2000 = 2_000_000
+        // Swap 100 in with 30bps fee.
+        // after_fee = 100 * 9970 = 997_000 (scaled by 10000)
+        // out = (2000 * 997_000) / (1000 * 10_000 + 997_000)
+        //     = 1_994_000_000 / 10_997_000
+        //     ~ 181
+        let out = calculate_output(1000, 2000, 100, 30);
+        assert!(out > 0 && out < 200);
+        assert_eq!(out, 181);
+    }
+
+    #[test]
+    fn test_zero_reserves() {
+        assert_eq!(calculate_output(0, 1000, 100, 30), 0);
+        assert_eq!(calculate_output(1000, 0, 100, 30), 0);
+        assert_eq!(calculate_output(1000, 1000, 0, 30), 0);
+    }
+
+    #[test]
+    fn test_price_impact_increases_with_size() {
+        let impact_small = calculate_price_impact(1_000_000, 1_000_000, 1_000, 30);
+        let impact_large = calculate_price_impact(1_000_000, 1_000_000, 100_000, 30);
+        assert!(impact_large > impact_small);
+    }
+
+    #[test]
+    fn test_optimal_split_single_pool() {
+        let result = calculate_optimal_split(&[(1_000_000, 1_000_000, 30)], 10_000);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], 10_000);
+    }
+
+    #[test]
+    fn test_optimal_split_equal_pools() {
+        let pools = vec![
+            (1_000_000u64, 1_000_000u64, 30u16),
+            (1_000_000, 1_000_000, 30),
+        ];
+        let result = calculate_optimal_split(&pools, 10_000);
+        assert_eq!(result.len(), 2);
+        let total: u64 = result.iter().sum();
+        assert_eq!(total, 10_000);
+        // For identical pools the split should be roughly equal.
+        let diff = (result[0] as i64 - result[1] as i64).unsigned_abs();
+        assert!(diff <= 2);
+    }
+
+    #[test]
+    fn test_pool_graph_construction() {
+        let token_a = make_pubkey(1);
+        let token_b = make_pubkey(2);
+        let token_c = make_pubkey(3);
+        let pool_ab = PoolInfo::constant_product(make_pubkey(10), token_a, token_b, 1000, 2000, 30);
+        let pool_bc = PoolInfo::constant_product(make_pubkey(11), token_b, token_c, 3000, 4000, 25);
+
+        let mut graph = PoolGraph::new();
+        graph.add_pool(&pool_ab);
+        graph.add_pool(&pool_bc);
+
+        assert_eq!(graph.token_count(), 3);
+        assert_eq!(graph.edge_count(), 4); // 2 per pool (bidirectional)
+
+        let reachable = graph.reachable_tokens(&token_a);
+        assert!(reachable.contains(&token_b));
+        assert!(reachable.contains(&token_c));
+    }
+
+    #[test]
+    fn test_pool_registry() {
+        let registry = PoolRegistry::new();
+        let token_a = make_pubkey(1);
+        let token_b = make_pubkey(2);
+        let pool = PoolInfo::constant_product(make_pubkey(10), token_a, token_b, 1000, 2000, 30);
+
+        registry.register(pool);
+
+        assert_eq!(registry.pool_count(), 1);
+        assert_eq!(registry.pools_for_pair(&token_a, &token_b).len(), 1);
+        assert_eq!(registry.pools_for_pair(&token_b, &token_a).len(), 1);
+        assert_eq!(registry.pools_for_token(&token_a).len(), 1);
+    }
+
+    #[test]
+    fn test_input_for_output_round_trip() {
+        let res_in = 1_000_000u64;
+        let res_out = 1_000_000u64;
+        let desired_out = 5_000u64;
+        let fee = 30u16;
+
+        let needed_in = calculate_input_for_output(res_in, res_out, desired_out, fee);
+        let actual_out = calculate_output(res_in, res_out, needed_in, fee);
+
+        // actual_out should be >= desired_out due to ceiling division.
+        assert!(actual_out >= desired_out);
+        // But not excessively more.
+        assert!(actual_out <= desired_out + 2);
+    }
+
+    #[test]
+    fn test_clmm_basic_swap() {
+        let ranges = vec![TickRange::new(-1000, 1000, 1_000_000_000)];
+        let (output, _new_tick) = calculate_clmm_output(&ranges, 0, 10_000, true, 30);
+        assert!(output > 0);
+    }
+}
