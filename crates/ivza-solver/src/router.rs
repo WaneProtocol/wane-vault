@@ -428,4 +428,288 @@ impl RouteEngine {
         Ok(completed_routes)
     }
 
-    
+    /// Find the single best route (highest score).
+    pub fn find_best_route(
+        &self,
+        input_mint: &Pubkey,
+        output_mint: &Pubkey,
+        amount: u64,
+    ) -> Result<Route> {
+        let routes = self.find_routes(input_mint, output_mint, amount)?;
+        routes
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("No valid route found from {} to {}", input_mint, output_mint))
+    }
+
+    /// Compute the output for a single pool edge.
+    fn compute_edge_output(
+        &self,
+        edge: &crate::pool::PoolEdge,
+        amount_in: u64,
+    ) -> u64 {
+        match edge.pool_type {
+            PoolType::ConstantProduct | PoolType::Orderbook => {
+                calculate_output(edge.reserve_in, edge.reserve_out, amount_in, edge.fee_bps)
+            }
+            PoolType::Clmm => {
+                // For CLMM we need the full pool info with tick ranges.
+                if let Some(pool) = self.registry.get(&edge.pool_address) {
+                    if pool.tick_ranges.is_empty() {
+                        // Fall back to constant-product approximation.
+                        return calculate_output(
+                            edge.reserve_in,
+                            edge.reserve_out,
+                            amount_in,
+                            edge.fee_bps,
+                        );
+                    }
+                    let a_to_b = edge.token_in == pool.token_a;
+                    let (out, _) = calculate_clmm_output(
+                        &pool.tick_ranges,
+                        pool.current_tick,
+                        amount_in,
+                        a_to_b,
+                        pool.fee_bps,
+                    );
+                    out
+                } else {
+                    calculate_output(edge.reserve_in, edge.reserve_out, amount_in, edge.fee_bps)
+                }
+            }
+        }
+    }
+
+    /// Score a route considering output amount, price impact, hop count, and pool depth.
+    pub fn score_route(&self, route: &Route) -> f64 {
+        if route.input_amount == 0 {
+            return 0.0;
+        }
+
+        let output_ratio = route.output_amount as f64 / route.input_amount as f64;
+        let hop_penalty = 0.995_f64.powi(route.hop_count() as i32 - 1);
+        let impact_factor = 1.0 - route.total_price_impact;
+
+        // Pool depth factor: penalize routes through shallow pools.
+        let depth_factor = route
+            .hops
+            .iter()
+            .map(|hop| {
+                let pool = self.registry.get(&hop.pool_address);
+                match pool {
+                    Some(p) => {
+                        let depth = p.reserve_a.min(p.reserve_b) as f64;
+                        let ratio = hop.input_amount as f64 / depth.max(1.0);
+                        // If the trade is a large fraction of the pool, penalize.
+                        (1.0 - ratio * 0.5).max(0.1)
+                    }
+                    None => 0.5,
+                }
+            })
+            .fold(1.0, |acc, f| acc * f);
+
+        output_ratio * hop_penalty * impact_factor * depth_factor
+    }
+
+    /// Re-quote a route with potentially updated pool reserves.
+    pub fn requote_route(&self, route: &Route) -> Result<Route> {
+        let mut current_amount = route.input_amount;
+        let mut new_hops = Vec::with_capacity(route.hop_count());
+
+        for hop in &route.hops {
+            let pool = self
+                .registry
+                .get(&hop.pool_address)
+                .ok_or_else(|| anyhow!("Pool {} no longer available", hop.pool_address))?;
+
+            let (reserve_in, reserve_out) = if hop.input_mint == pool.token_a {
+                (pool.reserve_a, pool.reserve_b)
+            } else {
+                (pool.reserve_b, pool.reserve_a)
+            };
+
+            let output = calculate_output(reserve_in, reserve_out, current_amount, pool.fee_bps);
+            if output == 0 {
+                return Err(anyhow!(
+                    "Route hop through pool {} now returns zero output",
+                    hop.pool_address
+                ));
+            }
+
+            let impact =
+                calculate_price_impact(reserve_in, reserve_out, current_amount, pool.fee_bps);
+
+            new_hops.push(RouteHop {
+                pool_address: hop.pool_address,
+                input_mint: hop.input_mint,
+                output_mint: hop.output_mint,
+                input_amount: current_amount,
+                output_amount: output,
+                fee_bps: pool.fee_bps,
+                pool_type: pool.pool_type,
+                price_impact: impact,
+            });
+
+            current_amount = output;
+        }
+
+        Ok(Route::from_hops(new_hops))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pool::PoolInfo;
+
+    fn make_pubkey(seed: u8) -> Pubkey {
+        Pubkey::new_from_array([seed; 32])
+    }
+
+    fn setup_registry() -> PoolRegistry {
+        let registry = PoolRegistry::new();
+
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+        let usdt = make_pubkey(3);
+        let ray = make_pubkey(4);
+
+        // SOL/USDC pool with decent liquidity.
+        registry.register(PoolInfo::constant_product(
+            make_pubkey(10),
+            sol,
+            usdc,
+            1_000_000_000, // 1B SOL
+            150_000_000_000, // 150B USDC (price ~150)
+            30,
+        ));
+
+        // USDC/USDT pool (stablecoin, tight spread).
+        registry.register(PoolInfo::constant_product(
+            make_pubkey(11),
+            usdc,
+            usdt,
+            500_000_000_000,
+            500_000_000_000,
+            5,
+        ));
+
+        // SOL/RAY pool.
+        registry.register(PoolInfo::constant_product(
+            make_pubkey(12),
+            sol,
+            ray,
+            2_000_000_000,
+            10_000_000_000,
+            30,
+        ));
+
+        // RAY/USDC pool.
+        registry.register(PoolInfo::constant_product(
+            make_pubkey(13),
+            ray,
+            usdc,
+            5_000_000_000,
+            3_750_000_000,
+            30,
+        ));
+
+        registry
+    }
+
+    #[test]
+    fn test_find_direct_route() {
+        let registry = setup_registry();
+        let engine = RouteEngine::new(registry);
+
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+
+        let routes = engine.find_routes(&sol, &usdc, 1_000_000).unwrap();
+        assert!(!routes.is_empty());
+
+        let best = &routes[0];
+        assert_eq!(best.input_mint, sol);
+        assert_eq!(best.output_mint, usdc);
+        assert!(best.output_amount > 0);
+        assert!(best.hop_count() >= 1);
+    }
+
+    #[test]
+    fn test_find_multihop_route() {
+        let registry = setup_registry();
+        let engine = RouteEngine::new(registry);
+
+        let sol = make_pubkey(1);
+        let usdt = make_pubkey(3);
+
+        // SOL -> USDC -> USDT is a 2-hop route.
+        let routes = engine.find_routes(&sol, &usdt, 1_000_000).unwrap();
+        assert!(!routes.is_empty());
+
+        // At least one route should be multi-hop.
+        let has_multihop = routes.iter().any(|r| r.hop_count() >= 2);
+        assert!(has_multihop);
+    }
+
+    #[test]
+    fn test_best_route() {
+        let registry = setup_registry();
+        let engine = RouteEngine::new(registry);
+
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+
+        let best = engine.find_best_route(&sol, &usdc, 1_000_000).unwrap();
+        assert!(best.output_amount > 0);
+        assert!(best.score > 0.0);
+    }
+
+    #[test]
+    fn test_no_route() {
+        let registry = PoolRegistry::new();
+        // Only register one pool.
+        registry.register(PoolInfo::constant_product(
+            make_pubkey(10),
+            make_pubkey(1),
+            make_pubkey(2),
+            1000,
+            2000,
+            30,
+        ));
+        let engine = RouteEngine::new(registry);
+
+        // Try to route between unconnected tokens.
+        let result = engine.find_routes(&make_pubkey(1), &make_pubkey(99), 1000);
+        assert!(result.is_err() || result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_routes_sorted_by_score() {
+        let registry = setup_registry();
+        let engine = RouteEngine::new(registry);
+
+        let sol = make_pubkey(1);
+        let usdt = make_pubkey(3);
+
+        let routes = engine.find_routes(&sol, &usdt, 1_000_000).unwrap();
+        for window in routes.windows(2) {
+            assert!(window[0].score >= window[1].score);
+        }
+    }
+
+    #[test]
+    fn test_requote_route() {
+        let registry = setup_registry();
+        let engine = RouteEngine::new(registry);
+
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+
+        let original = engine.find_best_route(&sol, &usdc, 1_000_000).unwrap();
+        let requoted = engine.requote_route(&original).unwrap();
+
+        // Same reserves, so requote should give the same output.
+        assert_eq!(original.output_amount, requoted.output_amount);
+    }
+}
