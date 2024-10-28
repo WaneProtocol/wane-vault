@@ -255,3 +255,208 @@ impl Default for SolverEngine {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_pubkey(seed: u8) -> Pubkey {
+        Pubkey::new_from_array([seed; 32])
+    }
+
+    #[test]
+    fn test_solver_engine_register_and_solve() {
+        let mut engine = SolverEngine::new();
+
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+
+        engine.register_pool(PoolInfo::constant_product(
+            make_pubkey(10),
+            sol,
+            usdc,
+            1_000_000_000,
+            150_000_000_000,
+            30,
+        ));
+
+        assert_eq!(engine.pool_count(), 1);
+
+        let requests = vec![SwapRequest {
+            node_id: 0,
+            input_mint: sol,
+            output_mint: usdc,
+            amount: 1_000_000,
+            label: Some("test".into()),
+        }];
+
+        let result = engine.solve(&requests, SolverStrategy::Greedy).unwrap();
+        assert!(result.all_solved());
+        assert!(result.total_output > 0);
+    }
+
+    #[test]
+    fn test_solver_engine_optimized() {
+        let mut engine = SolverEngine::new();
+
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+
+        engine.register_pool(PoolInfo::constant_product(
+            make_pubkey(10),
+            sol,
+            usdc,
+            10_000_000,
+            1_500_000_000,
+            30,
+        ));
+
+        let requests = vec![SwapRequest {
+            node_id: 0,
+            input_mint: sol,
+            output_mint: usdc,
+            amount: 500_000,
+            label: None,
+        }];
+
+        let opt = engine
+            .solve_optimized(&requests, SolverStrategy::Greedy)
+            .unwrap();
+        assert!(opt.optimized_output > 0);
+    }
+
+    #[test]
+    fn test_solver_engine_branch_and_bound() {
+        let mut engine = SolverEngine::new();
+
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+        let usdt = make_pubkey(3);
+
+        engine.register_pool(PoolInfo::constant_product(
+            make_pubkey(10),
+            sol,
+            usdc,
+            1_000_000_000,
+            150_000_000_000,
+            30,
+        ));
+        engine.register_pool(PoolInfo::constant_product(
+            make_pubkey(11),
+            usdc,
+            usdt,
+            500_000_000_000,
+            500_000_000_000,
+            5,
+        ));
+
+        let requests = vec![
+            SwapRequest {
+                node_id: 0,
+                input_mint: sol,
+                output_mint: usdc,
+                amount: 1_000_000,
+                label: None,
+            },
+            SwapRequest {
+                node_id: 1,
+                input_mint: usdc,
+                output_mint: usdt,
+                amount: 100_000_000,
+                label: None,
+            },
+        ];
+
+        let result = engine
+            .solve(&requests, SolverStrategy::BranchAndBound)
+            .unwrap();
+        assert!(result.all_solved());
+        assert_eq!(result.solved_swaps.len(), 2);
+    }
+
+    #[test]
+    fn test_find_best_route() {
+        let mut engine = SolverEngine::new();
+
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+
+        engine.register_pool(PoolInfo::constant_product(
+            make_pubkey(10),
+            sol,
+            usdc,
+            1_000_000_000,
+            150_000_000_000,
+            30,
+        ));
+
+        let route = engine.find_best_route(&sol, &usdc, 1_000_000).unwrap();
+        assert!(route.output_amount > 0);
+        assert_eq!(route.input_mint, sol);
+        assert_eq!(route.output_mint, usdc);
+    }
+
+    #[test]
+    fn test_fetch_and_register() {
+        let mut engine = SolverEngine::new();
+        let tokens = vec![make_pubkey(1), make_pubkey(2), make_pubkey(3)];
+        engine.fetch_and_register(&tokens);
+
+        // Should have created pools between consecutive pairs + shortcut.
+        assert!(engine.pool_count() >= 2);
+    }
+
+    #[test]
+    fn test_update_reserves() {
+        let mut engine = SolverEngine::new();
+        let pool_addr = make_pubkey(10);
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+
+        engine.register_pool(PoolInfo::constant_product(
+            pool_addr, sol, usdc, 1_000_000, 1_000_000, 30,
+        ));
+
+        engine
+            .update_reserves(&pool_addr, 2_000_000, 2_000_000)
+            .unwrap();
+
+        let pool = engine.registry.get(&pool_addr).unwrap();
+        assert_eq!(pool.reserve_a, 2_000_000);
+        assert_eq!(pool.reserve_b, 2_000_000);
+    }
+
+    #[test]
+    fn test_solver_strategy_default() {
+        assert_eq!(SolverStrategy::default(), SolverStrategy::Greedy);
+    }
+
+    #[test]
+    fn test_multihop_solve() {
+        let mut engine = SolverEngine::new();
+
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+        let usdt = make_pubkey(3);
+        let ray = make_pubkey(4);
+
+        engine.register_pool(PoolInfo::constant_product(
+            make_pubkey(10), sol, usdc, 1_000_000_000, 150_000_000_000, 30,
+        ));
+        engine.register_pool(PoolInfo::constant_product(
+            make_pubkey(11), usdc, usdt, 500_000_000_000, 500_000_000_000, 5,
+        ));
+        engine.register_pool(PoolInfo::constant_product(
+            make_pubkey(12), sol, ray, 2_000_000_000, 10_000_000_000, 30,
+        ));
+        engine.register_pool(PoolInfo::constant_product(
+            make_pubkey(13), ray, usdt, 5_000_000_000, 3_750_000_000, 30,
+        ));
+
+        // SOL -> USDT: should find routes through USDC and/or RAY.
+        let routes = engine.find_routes(&sol, &usdt, 1_000_000).unwrap();
+        assert!(!routes.is_empty());
+
+        let has_multihop = routes.iter().any(|r| r.hop_count() >= 2);
+        assert!(has_multihop);
+    }
+}
