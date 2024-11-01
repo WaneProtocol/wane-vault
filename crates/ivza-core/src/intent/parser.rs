@@ -229,4 +229,208 @@ impl IntentParser {
         }
     }
 
-    
+    fn parse_intent_type(&self, s: &str) -> Result<IntentType> {
+        match s.to_lowercase().as_str() {
+            "swap" => Ok(IntentType::Swap),
+            "multi_hop_swap" | "multihop" | "multi-hop" => Ok(IntentType::MultiHopSwap),
+            "stake" => Ok(IntentType::Stake),
+            "unstake" => Ok(IntentType::Unstake),
+            "provide_liquidity" | "add_liquidity" => Ok(IntentType::ProvideLiquidity),
+            "remove_liquidity" => Ok(IntentType::RemoveLiquidity),
+            "transfer" => Ok(IntentType::Transfer),
+            "create_account" => Ok(IntentType::CreateAccount),
+            _ => Err(anyhow!("Unknown intent type: {}", s)),
+        }
+    }
+
+    fn parse_params(
+        &self,
+        intent_type: &IntentType,
+        value: &serde_json::Value,
+    ) -> Result<IntentParams> {
+        match intent_type {
+            IntentType::Swap => {
+                let p: SwapParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::Swap(p))
+            }
+            IntentType::MultiHopSwap => {
+                let p: MultiHopSwapParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::MultiHopSwap(p))
+            }
+            IntentType::Stake => {
+                let p: StakeParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::Stake(p))
+            }
+            IntentType::Unstake => {
+                let p: UnstakeParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::Unstake(p))
+            }
+            IntentType::ProvideLiquidity => {
+                let p: ProvideLiquidityParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::ProvideLiquidity(p))
+            }
+            IntentType::RemoveLiquidity => {
+                let p: RemoveLiquidityParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::RemoveLiquidity(p))
+            }
+            IntentType::Transfer => {
+                let p: TransferParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::Transfer(p))
+            }
+            IntentType::CreateAccount => {
+                let p: CreateAccountParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::CreateAccount(p))
+            }
+        }
+    }
+
+    // --- DSL parsers ---
+
+    /// "swap <amount> <input_mint> for <output_mint> by <wallet>"
+    fn parse_swap_dsl(&self, tokens: &[&str]) -> Result<Intent> {
+        if tokens.len() < 6 {
+            return Err(anyhow!(
+                "Swap DSL format: swap <amount> <input_mint> for <output_mint> by <wallet>"
+            ));
+        }
+        let amount: u64 = tokens[1].parse().map_err(|_| anyhow!("Invalid amount"))?;
+        let input_mint = Pubkey::from_str(tokens[2]).map_err(|_| anyhow!("Invalid input_mint"))?;
+        // tokens[3] should be "for"
+        let output_mint =
+            Pubkey::from_str(tokens[4]).map_err(|_| anyhow!("Invalid output_mint"))?;
+        // tokens[5] should be "by"
+        let wallet = Pubkey::from_str(tokens[6]).map_err(|_| anyhow!("Invalid wallet"))?;
+
+        Ok(Intent::new(
+            IntentType::Swap,
+            IntentParams::Swap(SwapParams {
+                input_mint,
+                output_mint,
+                amount_in: amount,
+                minimum_amount_out: None,
+                user_wallet: wallet,
+                dex_program: None,
+            }),
+        ))
+    }
+
+    /// "stake <amount> to <validator> by <wallet>"
+    fn parse_stake_dsl(&self, tokens: &[&str]) -> Result<Intent> {
+        if tokens.len() < 5 {
+            return Err(anyhow!(
+                "Stake DSL format: stake <amount> to <validator> by <wallet>"
+            ));
+        }
+        let amount: u64 = tokens[1].parse().map_err(|_| anyhow!("Invalid amount"))?;
+        let validator =
+            Pubkey::from_str(tokens[3]).map_err(|_| anyhow!("Invalid validator pubkey"))?;
+        let wallet = Pubkey::from_str(tokens[5]).map_err(|_| anyhow!("Invalid wallet pubkey"))?;
+
+        Ok(Intent::new(
+            IntentType::Stake,
+            IntentParams::Stake(StakeParams {
+                amount,
+                validator_vote_account: validator,
+                user_wallet: wallet,
+                stake_account: None,
+            }),
+        ))
+    }
+
+    /// "unstake <stake_account> by <wallet>"
+    fn parse_unstake_dsl(&self, tokens: &[&str]) -> Result<Intent> {
+        if tokens.len() < 4 {
+            return Err(anyhow!(
+                "Unstake DSL format: unstake <stake_account> by <wallet>"
+            ));
+        }
+        let stake_account =
+            Pubkey::from_str(tokens[1]).map_err(|_| anyhow!("Invalid stake account"))?;
+        let wallet = Pubkey::from_str(tokens[3]).map_err(|_| anyhow!("Invalid wallet pubkey"))?;
+
+        Ok(Intent::new(
+            IntentType::Unstake,
+            IntentParams::Unstake(UnstakeParams {
+                stake_account,
+                user_wallet: wallet,
+            }),
+        ))
+    }
+
+    /// "transfer <amount> <mint> from <wallet> to <wallet>"
+    fn parse_transfer_dsl(&self, tokens: &[&str]) -> Result<Intent> {
+        if tokens.len() < 7 {
+            return Err(anyhow!(
+                "Transfer DSL format: transfer <amount> <mint> from <from_wallet> to <to_wallet>"
+            ));
+        }
+        let amount: u64 = tokens[1].parse().map_err(|_| anyhow!("Invalid amount"))?;
+        let mint = Pubkey::from_str(tokens[2]).map_err(|_| anyhow!("Invalid mint"))?;
+        let from = Pubkey::from_str(tokens[4]).map_err(|_| anyhow!("Invalid from wallet"))?;
+        let to = Pubkey::from_str(tokens[6]).map_err(|_| anyhow!("Invalid to wallet"))?;
+
+        Ok(Intent::new(
+            IntentType::Transfer,
+            IntentParams::Transfer(TransferParams {
+                mint,
+                amount,
+                from_wallet: from,
+                to_wallet: to,
+            }),
+        ))
+    }
+
+    /// "provide-liquidity <pool> <amount_a> <mint_a> <amount_b> <mint_b> by <wallet>"
+    fn parse_provide_liquidity_dsl(&self, tokens: &[&str]) -> Result<Intent> {
+        if tokens.len() < 8 {
+            return Err(anyhow!(
+                "Provide liquidity DSL format: provide-liquidity <pool> <amount_a> <mint_a> <amount_b> <mint_b> by <wallet>"
+            ));
+        }
+        let pool = Pubkey::from_str(tokens[1]).map_err(|_| anyhow!("Invalid pool"))?;
+        let amount_a: u64 = tokens[2].parse().map_err(|_| anyhow!("Invalid amount_a"))?;
+        let mint_a = Pubkey::from_str(tokens[3]).map_err(|_| anyhow!("Invalid mint_a"))?;
+        let amount_b: u64 = tokens[4].parse().map_err(|_| anyhow!("Invalid amount_b"))?;
+        let mint_b = Pubkey::from_str(tokens[5]).map_err(|_| anyhow!("Invalid mint_b"))?;
+        let wallet = Pubkey::from_str(tokens[7]).map_err(|_| anyhow!("Invalid wallet"))?;
+
+        Ok(Intent::new(
+            IntentType::ProvideLiquidity,
+            IntentParams::ProvideLiquidity(ProvideLiquidityParams {
+                pool,
+                token_a_mint: mint_a,
+                token_b_mint: mint_b,
+                amount_a,
+                amount_b,
+                user_wallet: wallet,
+            }),
+        ))
+    }
+
+    /// "remove-liquidity <pool> <lp_amount> by <wallet>"
+    fn parse_remove_liquidity_dsl(&self, tokens: &[&str]) -> Result<Intent> {
+        if tokens.len() < 5 {
+            return Err(anyhow!(
+                "Remove liquidity DSL format: remove-liquidity <pool> <lp_amount> by <wallet>"
+            ));
+        }
+        let pool = Pubkey::from_str(tokens[1]).map_err(|_| anyhow!("Invalid pool"))?;
+        let lp_amount: u64 = tokens[2].parse().map_err(|_| anyhow!("Invalid lp_amount"))?;
+        let wallet = Pubkey::from_str(tokens[4]).map_err(|_| anyhow!("Invalid wallet"))?;
+
+        Ok(Intent::new(
+            IntentType::RemoveLiquidity,
+            IntentParams::RemoveLiquidity(RemoveLiquidityParams {
+                pool,
+                lp_amount,
+                user_wallet: wallet,
+            }),
+        ))
+    }
+}
+
+impl Default for IntentParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
