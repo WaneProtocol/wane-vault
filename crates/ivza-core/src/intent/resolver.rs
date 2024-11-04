@@ -224,4 +224,304 @@ impl IntentResolver {
         builder.build()
     }
 
-    
+    /// Resolve a stake intent.
+    /// Graph: [create_stake_account] -> [delegate_stake]
+    fn resolve_stake(&self, params: &StakeParams, intent: &Intent) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+
+        let stake_account = params
+            .stake_account
+            .unwrap_or_else(|| self.derive_stake_account(&params.user_wallet, 0));
+
+        // Node 1: Create and initialize stake account.
+        let create_ix = InstructionData::new(
+            self.system_program,
+            vec![
+                AccountAccessEntry::write(params.user_wallet), // payer
+                AccountAccessEntry::write(stake_account),       // new stake account
+            ],
+            self.encode_u64(params.amount),
+        )
+        .with_label("create_stake_account");
+
+        let init_ix = InstructionData::new(
+            self.stake_program,
+            vec![
+                AccountAccessEntry::write(stake_account),
+                AccountAccessEntry::read(params.user_wallet), // staker/withdrawer
+            ],
+            vec![0], // Initialize instruction.
+        )
+        .with_label("init_stake_account");
+
+        let create_node =
+            builder.add_labeled_node("create_stake", vec![create_ix, init_ix]);
+
+        // Node 2: Delegate to validator.
+        let delegate_ix = InstructionData::new(
+            self.stake_program,
+            vec![
+                AccountAccessEntry::write(stake_account),
+                AccountAccessEntry::read(params.validator_vote_account),
+                AccountAccessEntry::read(params.user_wallet), // stake authority
+            ],
+            vec![2], // Delegate instruction discriminator.
+        )
+        .with_label("delegate_stake");
+
+        let delegate_node =
+            builder.add_labeled_node("delegate_stake", vec![delegate_ix]);
+
+        builder.add_data_dependency(create_node, delegate_node)?;
+
+        builder.build()
+    }
+
+    /// Resolve an unstake intent.
+    /// Graph: [deactivate] -> [withdraw] (withdraw happens after cooldown in practice).
+    fn resolve_unstake(
+        &self,
+        params: &UnstakeParams,
+        intent: &Intent,
+    ) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+
+        // Node 1: Deactivate.
+        let deactivate_ix = InstructionData::new(
+            self.stake_program,
+            vec![
+                AccountAccessEntry::write(params.stake_account),
+                AccountAccessEntry::read(params.user_wallet),
+            ],
+            vec![5], // Deactivate instruction.
+        )
+        .with_label("deactivate_stake");
+
+        let deactivate_node =
+            builder.add_labeled_node("deactivate_stake", vec![deactivate_ix]);
+
+        // Node 2: Withdraw (would execute after cooldown epoch in reality).
+        let withdraw_ix = InstructionData::new(
+            self.stake_program,
+            vec![
+                AccountAccessEntry::write(params.stake_account),
+                AccountAccessEntry::write(params.user_wallet), // recipient
+                AccountAccessEntry::read(params.user_wallet),  // withdraw authority
+            ],
+            vec![4], // Withdraw instruction.
+        )
+        .with_label("withdraw_stake");
+
+        let withdraw_node =
+            builder.add_labeled_node("withdraw_stake", vec![withdraw_ix]);
+
+        builder.add_order_dependency(deactivate_node, withdraw_node)?;
+
+        builder.build()
+    }
+
+    /// Resolve a provide liquidity intent.
+    /// Graph: [create_lp_ata] -> [deposit_a + deposit_b] -> [add_liquidity]
+    fn resolve_provide_liquidity(
+        &self,
+        params: &ProvideLiquidityParams,
+        intent: &Intent,
+    ) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+
+        let ata_a = self.derive_ata(&params.user_wallet, &params.token_a_mint);
+        let ata_b = self.derive_ata(&params.user_wallet, &params.token_b_mint);
+
+        // Node 1: Transfer token A to pool.
+        let transfer_a_ix = InstructionData::new(
+            self.token_program,
+            vec![
+                AccountAccessEntry::write(ata_a),
+                AccountAccessEntry::write(params.pool),
+                AccountAccessEntry::read(params.user_wallet),
+            ],
+            self.encode_u64(params.amount_a),
+        )
+        .with_label("transfer_token_a");
+
+        let transfer_a_node =
+            builder.add_labeled_node("transfer_a", vec![transfer_a_ix]);
+
+        // Node 2: Transfer token B to pool.
+        let transfer_b_ix = InstructionData::new(
+            self.token_program,
+            vec![
+                AccountAccessEntry::write(ata_b),
+                AccountAccessEntry::write(params.pool),
+                AccountAccessEntry::read(params.user_wallet),
+            ],
+            self.encode_u64(params.amount_b),
+        )
+        .with_label("transfer_token_b");
+
+        let transfer_b_node =
+            builder.add_labeled_node("transfer_b", vec![transfer_b_ix]);
+
+        // Node 3: Add liquidity instruction.
+        let add_liq_ix = InstructionData::new(
+            params.pool, // Pool program is the program to call.
+            vec![
+                AccountAccessEntry::write(params.pool),
+                AccountAccessEntry::read(params.user_wallet),
+                AccountAccessEntry::read(params.token_a_mint),
+                AccountAccessEntry::read(params.token_b_mint),
+            ],
+            vec![1], // Add liquidity discriminator.
+        )
+        .with_label("add_liquidity");
+
+        let add_liq_node =
+            builder.add_labeled_node("add_liquidity", vec![add_liq_ix]);
+
+        // Both transfers must complete before adding liquidity.
+        builder.add_data_dependency(transfer_a_node, add_liq_node)?;
+        builder.add_data_dependency(transfer_b_node, add_liq_node)?;
+
+        builder.build()
+    }
+
+    /// Resolve a remove liquidity intent.
+    fn resolve_remove_liquidity(
+        &self,
+        params: &RemoveLiquidityParams,
+        intent: &Intent,
+    ) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+
+        let remove_ix = InstructionData::new(
+            params.pool,
+            vec![
+                AccountAccessEntry::write(params.pool),
+                AccountAccessEntry::read(params.user_wallet),
+            ],
+            self.encode_u64(params.lp_amount),
+        )
+        .with_label("remove_liquidity");
+
+        builder.add_labeled_node("remove_liquidity", vec![remove_ix]);
+
+        builder.build()
+    }
+
+    /// Resolve a transfer intent.
+    fn resolve_transfer(
+        &self,
+        params: &TransferParams,
+        intent: &Intent,
+    ) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+
+        let from_ata = self.derive_ata(&params.from_wallet, &params.mint);
+        let to_ata = self.derive_ata(&params.to_wallet, &params.mint);
+
+        // Node 1: Create destination ATA if needed.
+        let create_ix = InstructionData::new(
+            self.ata_program,
+            vec![
+                AccountAccessEntry::write(params.from_wallet), // payer
+                AccountAccessEntry::write(to_ata),
+                AccountAccessEntry::read(params.to_wallet), // owner
+                AccountAccessEntry::read(params.mint),
+                AccountAccessEntry::read(self.system_program),
+                AccountAccessEntry::read(self.token_program),
+            ],
+            vec![0],
+        )
+        .with_label("create_dest_ata");
+
+        let create_node =
+            builder.add_labeled_node("create_dest_ata", vec![create_ix]);
+
+        // Node 2: Transfer.
+        let transfer_ix = InstructionData::new(
+            self.token_program,
+            vec![
+                AccountAccessEntry::write(from_ata),
+                AccountAccessEntry::write(to_ata),
+                AccountAccessEntry::read(params.from_wallet), // authority
+            ],
+            self.encode_u64(params.amount),
+        )
+        .with_label("transfer");
+
+        let transfer_node =
+            builder.add_labeled_node("transfer", vec![transfer_ix]);
+
+        builder.add_data_dependency(create_node, transfer_node)?;
+
+        builder.build()
+    }
+
+    /// Resolve a create account intent.
+    fn resolve_create_account(
+        &self,
+        params: &CreateAccountParams,
+        intent: &Intent,
+    ) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+
+        let ata = self.derive_ata(&params.owner, &params.mint);
+
+        let create_ix = InstructionData::new(
+            self.ata_program,
+            vec![
+                AccountAccessEntry::write(params.owner), // payer
+                AccountAccessEntry::write(ata),
+                AccountAccessEntry::read(params.owner),
+                AccountAccessEntry::read(params.mint),
+                AccountAccessEntry::read(self.system_program),
+                AccountAccessEntry::read(self.token_program),
+            ],
+            vec![0],
+        )
+        .with_label("create_ata");
+
+        builder.add_labeled_node("create_ata", vec![create_ix]);
+
+        builder.build()
+    }
+
+    // --- Helpers ---
+
+    /// Derive an associated token account address (deterministic PDA).
+    /// This is a simplified version; the real derivation uses find_program_address.
+    fn derive_ata(&self, wallet: &Pubkey, mint: &Pubkey) -> Pubkey {
+        // Use a deterministic derivation based on the wallet and mint.
+        let seeds = [wallet.as_ref(), self.token_program.as_ref(), mint.as_ref()];
+        let (ata, _bump) =
+            Pubkey::find_program_address(&seeds, &self.ata_program);
+        ata
+    }
+
+    /// Derive a stake account address.
+    fn derive_stake_account(&self, wallet: &Pubkey, index: u64) -> Pubkey {
+        let seeds = [wallet.as_ref(), &index.to_le_bytes()];
+        let (addr, _) = Pubkey::find_program_address(&seeds, &self.stake_program);
+        addr
+    }
+
+    /// Encode a u64 value as little-endian bytes.
+    fn encode_u64(&self, value: u64) -> Vec<u8> {
+        value.to_le_bytes().to_vec()
+    }
+
+    /// Encode swap instruction data.
+    fn encode_swap_data(&self, amount_in: u64, minimum_out: u64) -> Vec<u8> {
+        let mut data = Vec::with_capacity(17);
+        data.push(1); // Swap discriminator.
+        data.extend_from_slice(&amount_in.to_le_bytes());
+        data.extend_from_slice(&minimum_out.to_le_bytes());
+        data
+    }
+}
+
+impl Default for IntentResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
