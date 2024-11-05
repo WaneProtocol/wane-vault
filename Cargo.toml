@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/ivza-core",
     "crates/ivza-solver",
+    "crates/ivza-cli",
+    "programs/ivza-engine",
 ]
 
 [workspace.package]
@@ -14,9 +16,13 @@ repository = "https://github.com/ivza-protocol/ivza"
 [workspace.dependencies]
 ivza-core = { path = "crates/ivza-core" }
 ivza-solver = { path = "crates/ivza-solver" }
+anchor-lang = "0.30.1"
+anchor-spl = "0.30.1"
 solana-sdk = "1.18"
 solana-client = "1.18"
 solana-program = "1.18"
+spl-token = "4.0"
+spl-associated-token-account = "3.0"
 borsh = "1.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -25,10 +31,11 @@ anyhow = "1.0"
 tokio = { version = "1.0", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+clap = { version = "4.5", features = ["derive"] }
+bs58 = "0.5"
+base64 = "0.22"
+sha2 = "0.10"
 petgraph = "0.6"
 dashmap = "6.0"
 crossbeam-channel = "0.5"
 rayon = "1.10"
-bs58 = "0.5"
-base64 = "0.22"
-sha2 = "0.10"
