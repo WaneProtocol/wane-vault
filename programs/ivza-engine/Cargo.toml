@@ -1,0 +1,21 @@
+[package]
+name = "ivza-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "On-chain program for iVZA parallel execution engine"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "ivza_engine"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true }
