@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-check:
+    name: Rust (${{ matrix.toolchain }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, nightly]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            product/target
+          key: ${{ runner.os }}-cargo-${{ matrix.toolchain }}-${{ hashFiles('product/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.toolchain }}-
+
+      - name: Check formatting
+        working-directory: product
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        working-directory: product
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        working-directory: product
+        run: cargo test --all-features --verbose
+
+  typescript-check:
+    name: TypeScript SDK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: product/sdk/package-lock.json
+
+      - name: Install dependencies
+        working-directory: product/sdk
+        run: npm ci
+
+      - name: Build
+        working-directory: product/sdk
+        run: npm run build
+
+      - name: Lint
+        working-directory: product/sdk
+        run: npm run lint
+
+      - name: Test
+        working-directory: product/sdk
+        run: npm test
