@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ivza-core",
+    "crates/ivza-solver",
+    "crates/ivza-cli",
+    "programs/ivza-engine",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/ivza-protocol/ivza"
+
+[workspace.dependencies]
