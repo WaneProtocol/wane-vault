@@ -1,0 +1,12 @@
+[package]
+name = "ivza-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI for interacting with iVZA parallel execution engine"
+
+[[bin]]
+name = "ivza"
+path = "src/main.rs"
+
+[dependencies]
