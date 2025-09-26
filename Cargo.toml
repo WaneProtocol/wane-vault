@@ -14,3 +14,16 @@ license = "MIT"
 repository = "https://github.com/ivza-protocol/ivza"
 
 [workspace.dependencies]
+ivza-core = { path = "crates/ivza-core" }
+ivza-solver = { path = "crates/ivza-solver" }
+anchor-lang = "0.30.1"
+anchor-spl = "0.30.1"
+solana-sdk = "1.18"
+solana-client = "1.18"
+solana-program = "1.18"
+spl-token = "4.0"
+spl-associated-token-account = "3.0"
+borsh = "1.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
