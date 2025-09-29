@@ -113,3 +113,92 @@ impl AccountSet {
     pub fn is_empty(&self) -> bool {
         self.reads.is_empty() && self.writes.is_empty()
     }
+
+    /// Merge another AccountSet into this one.
+    pub fn merge(&mut self, other: &AccountSet) {
+        for key in &other.writes {
+            self.add_write(*key);
+        }
+        for key in &other.reads {
+            self.add_read(*key);
+        }
+    }
+
+    /// Check if this AccountSet conflicts with another.
+    /// Conflict occurs when both sets access the same account and at least one is a write.
+    pub fn conflicts_with(&self, other: &AccountSet) -> AccountConflict {
+        let mut conflicting = Vec::new();
+
+        // Our writes vs their reads or writes
+        for w in &self.writes {
+            if other.reads.contains(w) || other.writes.contains(w) {
+                conflicting.push(*w);
+            }
+        }
+
+        // Our reads vs their writes (don't double-count)
+        for r in &self.reads {
+            if other.writes.contains(r) && !conflicting.contains(r) {
+                conflicting.push(*r);
+            }
+        }
+
+        if conflicting.is_empty() {
+            AccountConflict::None
+        } else {
+            conflicting.sort();
+            AccountConflict::Conflict(conflicting)
+        }
+    }
+
+    /// Returns true if there is any conflict with the other set.
+    pub fn has_conflict(&self, other: &AccountSet) -> bool {
+        !matches!(self.conflicts_with(other), AccountConflict::None)
+    }
+}
+
+impl fmt::Display for AccountSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "AccountSet(reads={}, writes={})",
+            self.reads.len(),
+            self.writes.len()
+        )
+    }
+}
+
+/// Result of conflict detection between two account sets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountConflict {
+    /// No conflict detected.
+    None,
+    /// Conflict on the listed accounts.
+    Conflict(Vec<Pubkey>),
+}
+
+impl AccountConflict {
+    pub fn is_conflict(&self) -> bool {
+        matches!(self, AccountConflict::Conflict(_))
+    }
+
+    pub fn conflicting_accounts(&self) -> &[Pubkey] {
+        match self {
+            AccountConflict::None => &[],
+            AccountConflict::Conflict(accounts) => accounts,
+        }
+    }
+}
+
+/// Tracks account access across multiple transaction nodes.
+/// Used by the dependency analyzer to build the conflict graph.
+#[derive(Debug, Clone, Default)]
+pub struct AccountAccessTracker {
+    /// Maps each account to the list of (node_id, access_mode) entries.
+    accesses: HashMap<Pubkey, Vec<(u64, AccountAccess)>>,
+}
+
+impl AccountAccessTracker {
+    pub fn new() -> Self {
+        Self {
+            accesses: HashMap::new(),
