@@ -179,4 +179,114 @@ impl TransactionNode {
     /// Returns a deduplicated set of all accessed pubkeys.
     pub fn accessed_pubkeys(&self) -> Vec<Pubkey> {
         let mut keys: Vec<Pubkey> = self
-            .instructions
+            .instructions
+            .iter()
+            .flat_map(|ix| ix.accounts.iter().map(|a| a.pubkey))
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
+    /// Returns all pubkeys written across all instructions.
+    pub fn write_set(&self) -> Vec<Pubkey> {
+        let mut keys: Vec<Pubkey> = self
+            .instructions
+            .iter()
+            .flat_map(|ix| ix.write_accounts())
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
+    /// Returns all pubkeys read (but not written) across all instructions.
+    pub fn read_set(&self) -> Vec<Pubkey> {
+        let write_set = self.write_set();
+        let mut keys: Vec<Pubkey> = self
+            .instructions
+            .iter()
+            .flat_map(|ix| ix.read_accounts())
+            .filter(|k| !write_set.contains(k))
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+}
+
+impl fmt::Display for TransactionNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "TxNode(id={}, ixs={}, cu={})",
+            self.id,
+            self.instructions.len(),
+            self.estimated_cu
+        )
+    }
+}
+
+/// Dependency type between two transaction nodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DependencyType {
+    /// Write-after-read or write-after-write on the same account.
+    DataDependency,
+    /// Explicit ordering constraint (not derived from account access).
+    OrderDependency,
+    /// Both transactions access the same account and at least one writes.
+    AccountConflict,
+}
+
+/// An edge in the transaction graph representing a dependency.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionEdge {
+    /// Source node (must execute first).
+    pub from: NodeId,
+    /// Destination node (executes after source).
+    pub to: NodeId,
+    /// Type of dependency.
+    pub dependency_type: DependencyType,
+    /// Weight representing the cost/latency of the dependency.
+    pub weight: f64,
+    /// The conflicting accounts, if any.
+    pub conflicting_accounts: Vec<Pubkey>,
+}
+
+impl TransactionEdge {
+    pub fn new(from: NodeId, to: NodeId, dependency_type: DependencyType) -> Self {
+        Self {
+            from,
+            to,
+            dependency_type,
+            weight: 1.0,
+            conflicting_accounts: Vec::new(),
+        }
+    }
+
+    pub fn with_weight(mut self, weight: f64) -> Self {
+        self.weight = weight;
+        self
+    }
+
+    pub fn with_conflicting_accounts(mut self, accounts: Vec<Pubkey>) -> Self {
+        self.conflicting_accounts = accounts;
+        self
+    }
+}
+
+impl fmt::Display for TransactionEdge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Edge({} -> {}, {:?}, w={})",
+            self.from, self.to, self.dependency_type, self.weight
+        )
+    }
+}
+
+/// Status of a transaction execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExecutionStatus {
+    /// Not yet executed.
+    Pending,
