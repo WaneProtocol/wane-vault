@@ -202,3 +202,90 @@ impl AccountAccessTracker {
     pub fn new() -> Self {
         Self {
             accesses: HashMap::new(),
+        }
+    }
+
+    /// Record that a node accesses a given account.
+    pub fn record(&mut self, pubkey: Pubkey, node_id: u64, access: AccountAccess) {
+        self.accesses
+            .entry(pubkey)
+            .or_default()
+            .push((node_id, access));
+    }
+
+    /// Record all accesses from an AccountSet for a given node.
+    pub fn record_set(&mut self, node_id: u64, set: &AccountSet) {
+        for r in &set.reads {
+            self.record(*r, node_id, AccountAccess::Read);
+        }
+        for w in &set.writes {
+            self.record(*w, node_id, AccountAccess::Write);
+        }
+    }
+
+    /// Find all pairs of conflicting nodes.
+    /// Returns (node_a, node_b, conflicting_account) triples where node_a < node_b.
+    pub fn find_conflicts(&self) -> Vec<(u64, u64, Pubkey)> {
+        let mut conflicts = Vec::new();
+
+        for (pubkey, accesses) in &self.accesses {
+            let has_write = accesses.iter().any(|(_, a)| a.is_write());
+            if !has_write {
+                // All reads, no conflict.
+                continue;
+            }
+
+            // For each pair of accesses to this account where at least one is a write
+            for i in 0..accesses.len() {
+                for j in (i + 1)..accesses.len() {
+                    let (node_a, access_a) = &accesses[i];
+                    let (node_b, access_b) = &accesses[j];
+
+                    if node_a == node_b {
+                        continue;
+                    }
+
+                    if access_a.conflicts_with(access_b) {
+                        let (lo, hi) = if node_a < node_b {
+                            (*node_a, *node_b)
+                        } else {
+                            (*node_b, *node_a)
+                        };
+                        conflicts.push((lo, hi, *pubkey));
+                    }
+                }
+            }
+        }
+
+        // Deduplicate
+        conflicts.sort();
+        conflicts.dedup();
+        conflicts
+    }
+
+    /// Returns all node IDs that have accessed a given account.
+    pub fn nodes_accessing(&self, pubkey: &Pubkey) -> Vec<u64> {
+        self.accesses
+            .get(pubkey)
+            .map(|v| v.iter().map(|(id, _)| *id).collect())
+            .unwrap_or_default()
+    }
+
+    /// Returns all node IDs that write to a given account.
+    pub fn nodes_writing(&self, pubkey: &Pubkey) -> Vec<u64> {
+        self.accesses
+            .get(pubkey)
+            .map(|v| {
+                v.iter()
+                    .filter(|(_, a)| a.is_write())
+                    .map(|(id, _)| *id)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Returns the number of tracked accounts.
+    pub fn tracked_account_count(&self) -> usize {
+        self.accesses.len()
+    }
+}

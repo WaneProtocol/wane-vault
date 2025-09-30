@@ -289,4 +289,76 @@ impl fmt::Display for TransactionEdge {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExecutionStatus {
     /// Not yet executed.
-    Pending,
+    Pending,
+    /// Currently being executed.
+    Running,
+    /// Successfully executed.
+    Success,
+    /// Failed with an error message.
+    Failed(String),
+    /// Skipped due to a failed dependency.
+    Skipped,
+}
+
+impl ExecutionStatus {
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            ExecutionStatus::Success | ExecutionStatus::Failed(_) | ExecutionStatus::Skipped
+        )
+    }
+
+    pub fn is_success(&self) -> bool {
+        matches!(self, ExecutionStatus::Success)
+    }
+}
+
+/// Result of executing a single transaction node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionResult {
+    pub node_id: NodeId,
+    pub status: ExecutionStatus,
+    pub signature: Option<String>,
+    pub compute_units_consumed: Option<u64>,
+    pub execution_time_ms: u64,
+    pub slot: Option<u64>,
+    pub error_message: Option<String>,
+}
+
+impl ExecutionResult {
+    pub fn success(node_id: NodeId, signature: String, cu: u64, time_ms: u64) -> Self {
+        Self {
+            node_id,
+            status: ExecutionStatus::Success,
+            signature: Some(signature),
+            compute_units_consumed: Some(cu),
+            execution_time_ms: time_ms,
+            slot: None,
+            error_message: None,
+        }
+    }
+
+    pub fn failure(node_id: NodeId, error: String, time_ms: u64) -> Self {
+        Self {
+            node_id,
+            status: ExecutionStatus::Failed(error.clone()),
+            signature: None,
+            compute_units_consumed: None,
+            execution_time_ms: time_ms,
+            slot: None,
+            error_message: Some(error),
+        }
+    }
+
+    pub fn skipped(node_id: NodeId) -> Self {
+        Self {
+            node_id,
+            status: ExecutionStatus::Skipped,
+            signature: None,
+            compute_units_consumed: None,
+            execution_time_ms: 0,
+            slot: None,
+            error_message: None,
+        }
+    }
+}
