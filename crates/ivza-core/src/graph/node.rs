@@ -48,4 +48,55 @@ impl GraphNode {
     }
 
     pub fn with_priority(mut self, priority: i64) -> Self {
-        self.priority = priority;
+        self.priority = priority;
+        self
+    }
+
+    pub fn with_estimated_cu(mut self, cu: u64) -> Self {
+        self.estimated_cu = cu;
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn with_depth(mut self, depth: u32) -> Self {
+        self.depth = depth;
+        self
+    }
+
+    /// Returns true if this node's account access pattern conflicts with another node's.
+    pub fn conflicts_with(&self, other: &GraphNode) -> bool {
+        self.account_set.has_conflict(&other.account_set)
+    }
+
+    /// Returns the set of accounts written by this node.
+    pub fn write_set(&self) -> &HashSet<Pubkey> {
+        &self.account_set.writes
+    }
+
+    /// Returns the set of accounts read (not written) by this node.
+    pub fn read_set(&self) -> &HashSet<Pubkey> {
+        &self.account_set.reads
+    }
+
+    /// Returns all unique program IDs referenced by instructions in this node.
+    pub fn program_ids(&self) -> Vec<Pubkey> {
+        let mut ids: Vec<Pubkey> = self.instructions.iter().map(|ix| ix.program_id).collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    /// Total number of account accesses across all instructions.
+    pub fn total_account_accesses(&self) -> usize {
+        self.instructions.iter().map(|ix| ix.accounts.len()).sum()
+    }
+}
+
+impl fmt::Display for GraphNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = self.label.as_deref().unwrap_or("unlabeled");
+        write!(
