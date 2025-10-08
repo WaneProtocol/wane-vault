@@ -47,3 +47,51 @@ impl GraphEdge {
     /// Create an account conflict edge.
     pub fn account_conflict(from: NodeId, to: NodeId, accounts: Vec<Pubkey>) -> Self {
         let mut edge = Self::new(from, to, DependencyType::AccountConflict);
+        edge.conflicting_accounts = accounts;
+        edge
+    }
+
+    pub fn with_weight(mut self, weight: f64) -> Self {
+        self.weight = weight;
+        self
+    }
+
+    pub fn with_auto_detected(mut self, auto_detected: bool) -> Self {
+        self.auto_detected = auto_detected;
+        self
+    }
+
+    pub fn with_conflicting_accounts(mut self, accounts: Vec<Pubkey>) -> Self {
+        self.conflicting_accounts = accounts;
+        self
+    }
+
+    /// Returns true if this is an account conflict edge.
+    pub fn is_account_conflict(&self) -> bool {
+        matches!(self.dependency_type, DependencyType::AccountConflict)
+    }
+
+    /// Returns true if this is a data dependency edge.
+    pub fn is_data_dependency(&self) -> bool {
+        matches!(self.dependency_type, DependencyType::DataDependency)
+    }
+
+    /// Returns true if this is an order dependency edge.
+    pub fn is_order_dependency(&self) -> bool {
+        matches!(self.dependency_type, DependencyType::OrderDependency)
+    }
+}
+
+impl fmt::Display for GraphEdge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "GraphEdge({} -> {}, {:?}, w={:.2}, conflicts={})",
+            self.from,
+            self.to,
+            self.dependency_type,
+            self.weight,
+            self.conflicting_accounts.len(),
+        )
+    }
+}
