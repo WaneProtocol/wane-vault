@@ -162,4 +162,87 @@ impl TransactionGraph {
             _ => {}
         }
 
-        visited.insert(node, 1); // Mark in-progress.
+        visited.insert(node, 1); // Mark in-progress.
+
+        if let Some(succs) = self.adjacency.get(&node) {
+            for (succ, _) in succs {
+                if self.dfs_cycle_check(*succ, visited) {
+                    return true;
+                }
+            }
+        }
+
+        visited.insert(node, 2); // Mark done.
+        false
+    }
+
+    /// Compute a topological ordering of the graph using Kahn's algorithm.
+    /// Returns None if the graph contains a cycle.
+    pub fn topological_sort(&self) -> Option<Vec<NodeId>> {
+        let mut in_degree: HashMap<NodeId, usize> = HashMap::new();
+        for &id in self.nodes.keys() {
+            in_degree.insert(id, self.in_degree(id));
+        }
+
+        let mut queue: Vec<NodeId> = in_degree
+            .iter()
+            .filter(|(_, &deg)| deg == 0)
+            .map(|(&id, _)| id)
+            .collect();
+        queue.sort(); // Deterministic ordering.
+
+        let mut result = Vec::with_capacity(self.nodes.len());
+
+        while let Some(node) = queue.first().copied() {
+            queue.remove(0);
+            result.push(node);
+
+            for succ in self.successors(node) {
+                if let Some(deg) = in_degree.get_mut(&succ) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        // Insert in sorted position for determinism.
+                        let pos = queue.binary_search(&succ).unwrap_or_else(|e| e);
+                        queue.insert(pos, succ);
+                    }
+                }
+            }
+        }
+
+        if result.len() == self.nodes.len() {
+            Some(result)
+        } else {
+            None // Cycle detected.
+        }
+    }
+
+    /// Total estimated compute units across all nodes.
+    pub fn total_estimated_cu(&self) -> u64 {
+        self.nodes.values().map(|n| n.estimated_cu).sum()
+    }
+}
+
+impl Default for TransactionGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Fluent builder for constructing a TransactionGraph.
+pub struct TransactionGraphBuilder {
+    graph: TransactionGraph,
+}
+
+impl TransactionGraphBuilder {
+    pub fn new() -> Self {
+        Self {
+            graph: TransactionGraph::new(),
+        }
+    }
+
+    /// Add a node with the given instructions and return its assigned ID.
+    pub fn add_node(&mut self, instructions: Vec<InstructionData>) -> NodeId {
+        let id = self.graph.next_node_id();
+        let node = GraphNode::new(id, instructions);
+        self.graph.insert_node(node);
+        debug!("Added graph node {}", id);
