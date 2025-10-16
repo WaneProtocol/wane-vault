@@ -245,4 +245,86 @@ impl TransactionGraphBuilder {
         let id = self.graph.next_node_id();
         let node = GraphNode::new(id, instructions);
         self.graph.insert_node(node);
-        debug!("Added graph node {}", id);
+        debug!("Added graph node {}", id);
+        id
+    }
+
+    /// Add a pre-built GraphNode.
+    pub fn add_graph_node(&mut self, node: GraphNode) -> NodeId {
+        let id = node.id;
+        self.graph.insert_node(node);
+        id
+    }
+
+    /// Add a node with a label.
+    pub fn add_labeled_node(
+        &mut self,
+        label: impl Into<String>,
+        instructions: Vec<InstructionData>,
+    ) -> NodeId {
+        let id = self.graph.next_node_id();
+        let node = GraphNode::new(id, instructions).with_label(label);
+        self.graph.insert_node(node);
+        id
+    }
+
+    /// Add a node with custom estimated CU.
+    pub fn add_node_with_cu(&mut self, instructions: Vec<InstructionData>, cu: u64) -> NodeId {
+        let id = self.graph.next_node_id();
+        let node = GraphNode::new(id, instructions).with_estimated_cu(cu);
+        self.graph.insert_node(node);
+        id
+    }
+
+    /// Add an edge between two nodes.
+    pub fn add_edge(
+        &mut self,
+        from: NodeId,
+        to: NodeId,
+        dep_type: DependencyType,
+    ) -> Result<&mut Self> {
+        let edge = GraphEdge::new(from, to, dep_type);
+        self.graph.add_edge(edge)?;
+        debug!("Added edge {} -> {} ({:?})", from, to, dep_type);
+        Ok(self)
+    }
+
+    /// Add a data dependency edge.
+    pub fn add_data_dependency(&mut self, from: NodeId, to: NodeId) -> Result<&mut Self> {
+        self.add_edge(from, to, DependencyType::DataDependency)
+    }
+
+    /// Add an order dependency edge.
+    pub fn add_order_dependency(&mut self, from: NodeId, to: NodeId) -> Result<&mut Self> {
+        self.add_edge(from, to, DependencyType::OrderDependency)
+    }
+
+    /// Add an account conflict edge.
+    pub fn add_account_conflict(&mut self, from: NodeId, to: NodeId) -> Result<&mut Self> {
+        self.add_edge(from, to, DependencyType::AccountConflict)
+    }
+
+    /// Build the graph, validating that it's a valid DAG.
+    pub fn build(self) -> Result<TransactionGraph> {
+        if self.graph.has_cycle() {
+            return Err(anyhow!("Transaction graph contains a cycle"));
+        }
+        info!(
+            "Built transaction graph with {} nodes and {} edges",
+            self.graph.node_count(),
+            self.graph.edge_count()
+        );
+        Ok(self.graph)
+    }
+
+    /// Build without cycle validation (for intermediate constructions).
+    pub fn build_unchecked(self) -> TransactionGraph {
+        self.graph
+    }
+}
+
+impl Default for TransactionGraphBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
