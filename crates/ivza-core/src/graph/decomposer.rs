@@ -149,4 +149,105 @@ impl GraphDecomposer {
                 }
             }
         }
-
+
+        // Step 6: Add edges from the instruction-level dependency graph to the node-level graph.
+        let mut added_edges: HashSet<(NodeId, NodeId)> = HashSet::new();
+        for edge_ref in pg.edge_indices() {
+            if let Some((src, dst)) = pg.edge_endpoints(edge_ref) {
+                let src_ix = pg[src];
+                let dst_ix = pg[dst];
+                let src_node = ix_to_node[&src_ix];
+                let dst_node = ix_to_node[&dst_ix];
+
+                // Skip self-edges (instructions in the same node).
+                if src_node == dst_node {
+                    continue;
+                }
+
+                // Avoid duplicate edges.
+                if added_edges.contains(&(src_node, dst_node)) {
+                    continue;
+                }
+                added_edges.insert((src_node, dst_node));
+
+                let dep_type = pg[edge_ref];
+                builder.add_edge(src_node, dst_node, dep_type)?;
+            }
+        }
+
+        let graph = builder.build()?;
+        info!(
+            "Decomposed into {} nodes and {} edges",
+            graph.node_count(),
+            graph.edge_count()
+        );
+
+        Ok(graph)
+    }
+
+    /// Decompose multiple independent transaction node sets and merge them into one graph.
+    pub fn decompose_multiple(
+        &self,
+        instruction_sets: Vec<Vec<InstructionData>>,
+    ) -> Result<TransactionGraph> {
+        let mut combined = TransactionGraph::new();
+
+        for ixs in instruction_sets {
+            let sub_graph = self.decompose(ixs)?;
+            self.merge_into(&mut combined, sub_graph)?;
+        }
+
+        Ok(combined)
+    }
+
+    /// Merge a sub-graph into the target graph, remapping node IDs.
+    fn merge_into(&self, target: &mut TransactionGraph, source: TransactionGraph) -> Result<()> {
+        let mut id_map: HashMap<NodeId, NodeId> = HashMap::new();
+
+        // Remap and insert nodes.
+        for (old_id, node) in source.nodes {
+            let new_id = target.next_node_id();
+            let mut new_node = node;
+            new_node.id = new_id;
+            target.insert_node(new_node);
+            id_map.insert(old_id, new_id);
+        }
+
+        // Remap and insert edges.
+        for edge in source.edges {
+            let new_from = id_map[&edge.from];
+            let new_to = id_map[&edge.to];
+            let new_edge = GraphEdge::new(new_from, new_to, edge.dependency_type)
+                .with_weight(edge.weight)
+                .with_conflicting_accounts(edge.conflicting_accounts);
+            target.add_edge(new_edge)?;
+        }
+
+        Ok(())
+    }
+
+    /// Classify the dependency type between two account sets.
+    fn classify_dependency(&self, set_a: &AccountSet, set_b: &AccountSet) -> DependencyType {
+        // Check for write-write conflict (true data dependency).
+        let write_write = set_a.writes.iter().any(|w| set_b.writes.contains(w));
+        if write_write {
+            return DependencyType::DataDependency;
+        }
+
+        // Otherwise it's a read-write conflict (account conflict).
+        DependencyType::AccountConflict
+    }
+
+    /// Create a trivial graph with a single node containing all instructions.
+    fn single_node_graph(&self, instructions: Vec<InstructionData>) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+        builder.add_labeled_node("single", instructions);
+        builder.build()
+    }
+}
+
+impl Default for GraphDecomposer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
