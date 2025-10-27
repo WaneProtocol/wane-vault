@@ -142,4 +142,29 @@ impl GraphNodeBuilder {
         self
     }
 
-    pub fn priority(mut self, priority: i64) -> Self {
+    pub fn priority(mut self, priority: i64) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    pub fn estimated_cu(mut self, cu: u64) -> Self {
+        self.estimated_cu = Some(cu);
+        self
+    }
+
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn build(self) -> GraphNode {
+        let mut node = GraphNode::new(self.id, self.instructions).with_priority(self.priority);
+        if let Some(cu) = self.estimated_cu {
+            node = node.with_estimated_cu(cu);
+        }
+        if let Some(label) = self.label {
+            node = node.with_label(label);
+        }
+        node
+    }
+}
