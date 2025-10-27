@@ -99,4 +99,47 @@ impl GraphNode {
 impl fmt::Display for GraphNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = self.label.as_deref().unwrap_or("unlabeled");
-        write!(
+        write!(
+            f,
+            "GraphNode(id={}, label={}, pri={}, cu={}, reads={}, writes={})",
+            self.id,
+            label,
+            self.priority,
+            self.estimated_cu,
+            self.account_set.reads.len(),
+            self.account_set.writes.len(),
+        )
+    }
+}
+
+/// Convenience builder for creating GraphNode instances with a fluent API.
+pub struct GraphNodeBuilder {
+    id: NodeId,
+    instructions: Vec<InstructionData>,
+    priority: i64,
+    estimated_cu: Option<u64>,
+    label: Option<String>,
+}
+
+impl GraphNodeBuilder {
+    pub fn new(id: NodeId) -> Self {
+        Self {
+            id,
+            instructions: Vec::new(),
+            priority: 0,
+            estimated_cu: None,
+            label: None,
+        }
+    }
+
+    pub fn instruction(mut self, ix: InstructionData) -> Self {
+        self.instructions.push(ix);
+        self
+    }
+
+    pub fn instructions(mut self, ixs: Vec<InstructionData>) -> Self {
+        self.instructions.extend(ixs);
+        self
+    }
+
+    pub fn priority(mut self, priority: i64) -> Self {
