@@ -240,3 +240,124 @@ fn test_topo_sort_parallel_branches() {
 fn test_topo_sort_single_node() {
     let mut graph = TransactionGraph::new();
     graph.insert_node(GraphNode::new(0, vec![]));
+    let topo = graph.topological_sort().unwrap();
+    assert_eq!(topo, vec![0]);
+}
+
+#[test]
+fn test_topo_sort_empty_graph() {
+    let graph = TransactionGraph::new();
+    let topo = graph.topological_sort().unwrap();
+    assert!(topo.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Cycle detection tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_no_cycle_simple_dag() {
+    let mut graph = TransactionGraph::new();
+    graph.insert_node(GraphNode::new(0, vec![]));
+    graph.insert_node(GraphNode::new(1, vec![]));
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+        .unwrap();
+    assert!(!graph.has_cycle());
+}
+
+#[test]
+fn test_cycle_two_nodes() {
+    let mut graph = TransactionGraph::new();
+    graph.insert_node(GraphNode::new(0, vec![]));
+    graph.insert_node(GraphNode::new(1, vec![]));
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::OrderDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(1, 0, DependencyType::OrderDependency))
+        .unwrap();
+
+    assert!(graph.has_cycle());
+    assert!(graph.topological_sort().is_none());
+}
+
+#[test]
+fn test_cycle_three_nodes() {
+    let mut graph = TransactionGraph::new();
+    for i in 0..3 {
+        graph.insert_node(GraphNode::new(i, vec![]));
+    }
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::OrderDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(1, 2, DependencyType::OrderDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(2, 0, DependencyType::OrderDependency))
+        .unwrap();
+
+    assert!(graph.has_cycle());
+}
+
+#[test]
+fn test_self_loop_is_cycle() {
+    let mut graph = TransactionGraph::new();
+    graph.insert_node(GraphNode::new(0, vec![]));
+    graph
+        .add_edge(GraphEdge::new(0, 0, DependencyType::OrderDependency))
+        .unwrap();
+    assert!(graph.has_cycle());
+}
+
+#[test]
+fn test_disconnected_acyclic() {
+    let mut graph = TransactionGraph::new();
+    for i in 0..4 {
+        graph.insert_node(GraphNode::new(i, vec![]));
+    }
+    // No edges at all -- fully disconnected
+    assert!(!graph.has_cycle());
+}
+
+// ---------------------------------------------------------------------------
+// Graph structure queries
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_root_and_leaf_nodes() {
+    let mut graph = TransactionGraph::new();
+    for i in 0..3 {
+        graph.insert_node(GraphNode::new(i, vec![]));
+    }
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(1, 2, DependencyType::DataDependency))
+        .unwrap();
+
+    let mut roots = graph.root_nodes();
+    roots.sort();
+    assert_eq!(roots, vec![0]);
+
+    let mut leaves = graph.leaf_nodes();
+    leaves.sort();
+    assert_eq!(leaves, vec![2]);
+}
+
+#[test]
+fn test_successors_and_predecessors() {
+    let mut graph = TransactionGraph::new();
+    for i in 0..4 {
+        graph.insert_node(GraphNode::new(i, vec![]));
+    }
+    // 0 -> 1, 0 -> 2, 1 -> 3
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(0, 2, DependencyType::DataDependency))
+        .unwrap();
+    graph
