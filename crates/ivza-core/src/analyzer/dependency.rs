@@ -57,4 +57,45 @@ impl DependencyAnalyzer {
                 }
             }
             tracker.record_set(id, &set);
-            node_sets.insert(id, set);
+            node_sets.insert(id, set);
+        }
+
+        // Collect existing edges so we don't create duplicates.
+        let existing_edges: HashSet<(NodeId, NodeId)> =
+            graph.edges.iter().map(|e| (e.from, e.to)).collect();
+
+        // Find all conflicting node pairs using the tracker.
+        let conflicts = tracker.find_conflicts();
+
+        // Group conflicts by node pair and collect conflicting accounts.
+        let mut pair_conflicts: HashMap<(NodeId, NodeId), Vec<Pubkey>> = HashMap::new();
+        for (a, b, account) in &conflicts {
+            pair_conflicts.entry((*a, *b)).or_default().push(*account);
+        }
+
+        let mut added = 0;
+
+        for ((node_a, node_b), accounts) in &pair_conflicts {
+            // Skip if edge already exists.
+            if existing_edges.contains(&(*node_a, *node_b))
+                || existing_edges.contains(&(*node_b, *node_a))
+            {
+                continue;
+            }
+
+            let set_a = &node_sets[node_a];
+            let set_b = &node_sets[node_b];
+
+            // Determine the dependency type.
+            let dep_type = self.classify_conflict(set_a, set_b, accounts);
+
+            if let Some(dep_type) = dep_type {
+                // Determine edge direction: lower ID -> higher ID (respecting original ordering).
+                let (from, to) = if node_a < node_b {
+                    (*node_a, *node_b)
+                } else {
+                    (*node_b, *node_a)
+                };
+
+                let edge = GraphEdge::new(from, to, dep_type)
+                    .with_auto_detected(true)
