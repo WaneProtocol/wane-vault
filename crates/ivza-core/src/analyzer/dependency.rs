@@ -98,4 +98,54 @@ impl DependencyAnalyzer {
                 };
 
                 let edge = GraphEdge::new(from, to, dep_type)
-                    .with_auto_detected(true)
+                    .with_auto_detected(true)
+                    .with_conflicting_accounts(accounts.clone());
+
+                if let Err(e) = result.add_edge(edge) {
+                    debug!("Could not add edge {} -> {}: {}", from, to, e);
+                } else {
+                    added += 1;
+                }
+            }
+        }
+
+        info!("Dependency analysis added {} edges", added);
+        Ok(result)
+    }
+
+    /// Classify the conflict type between two sets given the conflicting accounts.
+    fn classify_conflict(
+        &self,
+        set_a: &AccountSet,
+        set_b: &AccountSet,
+        conflicting_accounts: &[Pubkey],
+    ) -> Option<DependencyType> {
+        let mut has_write_write = false;
+        let mut has_read_write = false;
+
+        for account in conflicting_accounts {
+            let a_writes = set_a.writes.contains(account);
+            let b_writes = set_b.writes.contains(account);
+
+            if a_writes && b_writes {
+                has_write_write = true;
+            } else if a_writes || b_writes {
+                has_read_write = true;
+            }
+        }
+
+        if has_write_write && self.detect_write_write {
+            Some(DependencyType::DataDependency)
+        } else if has_read_write && self.detect_read_write {
+            Some(DependencyType::AccountConflict)
+        } else {
+            None
+        }
+    }
+
+    /// Returns a summary of how many conflicts exist per account.
+    pub fn conflict_summary(&self, graph: &TransactionGraph) -> HashMap<Pubkey, usize> {
+        let mut tracker = AccountAccessTracker::new();
+        for (&id, node) in &graph.nodes {
+            let mut set = AccountSet::new();
+            for ix in &node.instructions {
