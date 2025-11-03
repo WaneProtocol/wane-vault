@@ -148,4 +148,54 @@ impl DependencyAnalyzer {
         let mut tracker = AccountAccessTracker::new();
         for (&id, node) in &graph.nodes {
             let mut set = AccountSet::new();
-            for ix in &node.instructions {
+            for ix in &node.instructions {
+                for entry in &ix.accounts {
+                    if !self.excluded_accounts.contains(&entry.pubkey) {
+                        set.add(entry.pubkey, entry.access);
+                    }
+                }
+            }
+            tracker.record_set(id, &set);
+        }
+
+        let conflicts = tracker.find_conflicts();
+        let mut counts: HashMap<Pubkey, usize> = HashMap::new();
+        for (_, _, account) in conflicts {
+            *counts.entry(account).or_default() += 1;
+        }
+        counts
+    }
+
+    /// Returns the set of node IDs that are independent (have no conflicts with any other node).
+    pub fn independent_nodes(&self, graph: &TransactionGraph) -> HashSet<NodeId> {
+        let all_ids: HashSet<NodeId> = graph.nodes.keys().copied().collect();
+        let mut conflicting: HashSet<NodeId> = HashSet::new();
+
+        let mut tracker = AccountAccessTracker::new();
+        for (&id, node) in &graph.nodes {
+            let mut set = AccountSet::new();
+            for ix in &node.instructions {
+                for entry in &ix.accounts {
+                    if !self.excluded_accounts.contains(&entry.pubkey) {
+                        set.add(entry.pubkey, entry.access);
+                    }
+                }
+            }
+            tracker.record_set(id, &set);
+        }
+
+        let conflicts = tracker.find_conflicts();
+        for (a, b, _) in conflicts {
+            conflicting.insert(a);
+            conflicting.insert(b);
+        }
+
+        all_ids.difference(&conflicting).copied().collect()
+    }
+}
+
+impl Default for DependencyAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
