@@ -72,4 +72,67 @@ impl CriticalPathResult {
 /// 2. Backward pass: compute latest start/finish times.
 /// 3. Slack computation: latest_start - earliest_start.
 /// 4. Critical path: nodes with zero slack.
-pub struct CriticalPathAnalyzer {
+pub struct CriticalPathAnalyzer {
+    /// If true, use estimated CU as duration. If false, use uniform duration of 1.0.
+    pub use_cu_as_duration: bool,
+}
+
+impl CriticalPathAnalyzer {
+    pub fn new() -> Self {
+        Self {
+            use_cu_as_duration: true,
+        }
+    }
+
+    pub fn with_uniform_duration(mut self) -> Self {
+        self.use_cu_as_duration = false;
+        self
+    }
+
+    /// Run the critical path analysis on the given graph.
+    pub fn analyze(&self, graph: &TransactionGraph) -> Result<CriticalPathResult> {
+        let topo_order = graph
+            .topological_sort()
+            .ok_or_else(|| anyhow!("Cannot compute critical path: graph has a cycle"))?;
+
+        if topo_order.is_empty() {
+            return Ok(CriticalPathResult {
+                timings: HashMap::new(),
+                critical_path: Vec::new(),
+                makespan: 0.0,
+                critical_cu: 0,
+            });
+        }
+
+        info!("Computing critical path for {} nodes", topo_order.len());
+
+        // Compute duration for each node.
+        let durations: HashMap<NodeId, f64> = graph
+            .nodes
+            .iter()
+            .map(|(&id, node)| {
+                let dur = if self.use_cu_as_duration {
+                    node.estimated_cu as f64
+                } else {
+                    1.0
+                };
+                (id, dur)
+            })
+            .collect();
+
+        // Forward pass: compute earliest start and finish.
+        let mut earliest_start: HashMap<NodeId, f64> = HashMap::new();
+        let mut earliest_finish: HashMap<NodeId, f64> = HashMap::new();
+
+        for &node_id in &topo_order {
+            let preds = graph.predecessors(node_id);
+            let es = if preds.is_empty() {
+                0.0
+            } else {
+                preds
+                    .iter()
+                    .map(|&p| earliest_finish.get(&p).copied().unwrap_or(0.0))
+                    .fold(0.0_f64, f64::max)
+            };
+            let dur = durations[&node_id];
+            earliest_start.insert(node_id, es);
