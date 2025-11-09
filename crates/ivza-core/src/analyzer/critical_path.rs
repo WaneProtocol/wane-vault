@@ -197,4 +197,54 @@ impl CriticalPathAnalyzer {
             .collect();
 
         let critical_cu: u64 = critical_path
-            .iter()
+            .iter()
+            .filter_map(|id| graph.nodes.get(id))
+            .map(|n| n.estimated_cu)
+            .sum();
+
+        info!(
+            "Critical path: {} nodes, makespan={:.0}, critical_cu={}",
+            critical_path.len(),
+            makespan,
+            critical_cu
+        );
+
+        Ok(CriticalPathResult {
+            timings,
+            critical_path,
+            makespan,
+            critical_cu,
+        })
+    }
+
+    /// Compute the depth (longest path from any root) for each node.
+    pub fn compute_depths(&self, graph: &TransactionGraph) -> Result<HashMap<NodeId, u32>> {
+        let topo_order = graph
+            .topological_sort()
+            .ok_or_else(|| anyhow!("Graph has a cycle"))?;
+
+        let mut depths: HashMap<NodeId, u32> = HashMap::new();
+
+        for &node_id in &topo_order {
+            let preds = graph.predecessors(node_id);
+            let depth = if preds.is_empty() {
+                0
+            } else {
+                preds
+                    .iter()
+                    .map(|&p| depths.get(&p).copied().unwrap_or(0) + 1)
+                    .max()
+                    .unwrap_or(0)
+            };
+            depths.insert(node_id, depth);
+        }
+
+        Ok(depths)
+    }
+}
+
+impl Default for CriticalPathAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
