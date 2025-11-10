@@ -81,4 +81,75 @@ impl ParallelismAnalyzer {
                 depth: 0,
             });
         }
-
+
+        info!("Analyzing parallelism for {} nodes", graph.node_count());
+
+        // Compute parallel levels using BFS-based topological layering.
+        let levels = self.compute_levels(graph)?;
+
+        let max_parallelism = levels.iter().map(|l| l.width()).max().unwrap_or(0);
+        let avg_parallelism = if levels.is_empty() {
+            0.0
+        } else {
+            let total_nodes: usize = levels.iter().map(|l| l.width()).sum();
+            total_nodes as f64 / levels.len() as f64
+        };
+
+        // Compute independent subgraphs.
+        let independent_subgraphs = self.find_independent_subgraphs(graph);
+
+        let depth = levels.len();
+
+        info!(
+            "Parallelism analysis: {} levels, max_par={}, avg_par={:.2}, subgraphs={}",
+            depth,
+            max_parallelism,
+            avg_parallelism,
+            independent_subgraphs.len()
+        );
+
+        Ok(ParallelismResult {
+            levels,
+            max_parallelism,
+            avg_parallelism,
+            independent_subgraphs,
+            depth,
+        })
+    }
+
+    /// Compute parallel levels using Kahn's algorithm with level tracking.
+    /// Each level contains all nodes whose in-degree becomes zero at that step.
+    fn compute_levels(&self, graph: &TransactionGraph) -> Result<Vec<ParallelLevel>> {
+        let mut in_degree: HashMap<NodeId, usize> = HashMap::new();
+        for &id in graph.nodes.keys() {
+            in_degree.insert(id, graph.in_degree(id));
+        }
+
+        // Start with all zero-in-degree nodes.
+        let mut current_level: Vec<NodeId> = in_degree
+            .iter()
+            .filter(|(_, &deg)| deg == 0)
+            .map(|(&id, _)| id)
+            .collect();
+        current_level.sort();
+
+        let mut levels = Vec::new();
+        let mut processed = 0;
+
+        while !current_level.is_empty() {
+            let total_cu: u64 = current_level
+                .iter()
+                .filter_map(|id| graph.nodes.get(id))
+                .map(|n| n.estimated_cu)
+                .sum();
+
+            levels.push(ParallelLevel {
+                level: levels.len(),
+                nodes: current_level.clone(),
+                total_cu,
+            });
+
+            processed += current_level.len();
+
+            // Compute next level.
+            let mut next_level = Vec::new();
