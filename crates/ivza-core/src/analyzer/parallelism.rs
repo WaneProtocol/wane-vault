@@ -223,4 +223,60 @@ impl ParallelismAnalyzer {
         for edge in &graph.edges {
             if let (Some(&idx_a), Some(&idx_b)) =
                 (id_to_idx.get(&edge.from), id_to_idx.get(&edge.to))
-            {
+            {
+                union(&mut parent, &mut rank, idx_a, idx_b);
+            }
+        }
+
+        // Group by root.
+        let mut components: HashMap<usize, Vec<NodeId>> = HashMap::new();
+        for (i, &node_id) in node_ids.iter().enumerate() {
+            let root = find(&mut parent, i);
+            components.entry(root).or_default().push(node_id);
+        }
+
+        let mut result: Vec<Vec<NodeId>> = components.into_values().collect();
+        // Sort components for determinism.
+        for component in &mut result {
+            component.sort();
+        }
+        result.sort_by_key(|c| c[0]);
+        result
+    }
+
+    /// Compute the parallelism ratio: how much faster the parallel execution is
+    /// compared to sequential. Returns (sequential_cost, parallel_cost, ratio).
+    pub fn parallelism_ratio(&self, graph: &TransactionGraph) -> Result<(f64, f64, f64)> {
+        let levels = self.compute_levels(graph)?;
+
+        let sequential_cost: f64 = graph.nodes.values().map(|n| n.estimated_cu as f64).sum();
+
+        // Parallel cost is the sum of max CU in each level (each level takes as long
+        // as its slowest node).
+        let parallel_cost: f64 = levels
+            .iter()
+            .map(|level| {
+                level
+                    .nodes
+                    .iter()
+                    .filter_map(|id| graph.nodes.get(id))
+                    .map(|n| n.estimated_cu as f64)
+                    .fold(0.0_f64, f64::max)
+            })
+            .sum();
+
+        let ratio = if parallel_cost > 0.0 {
+            sequential_cost / parallel_cost
+        } else {
+            1.0
+        };
+
+        Ok((sequential_cost, parallel_cost, ratio))
+    }
+}
+
+impl Default for ParallelismAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
