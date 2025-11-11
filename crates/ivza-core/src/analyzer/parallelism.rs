@@ -152,4 +152,75 @@ impl ParallelismAnalyzer {
             processed += current_level.len();
 
             // Compute next level.
-            let mut next_level = Vec::new();
+            let mut next_level = Vec::new();
+            for &node_id in &current_level {
+                for succ in graph.successors(node_id) {
+                    if let Some(deg) = in_degree.get_mut(&succ) {
+                        *deg -= 1;
+                        if *deg == 0 {
+                            next_level.push(succ);
+                        }
+                    }
+                }
+            }
+            next_level.sort();
+            next_level.dedup();
+            current_level = next_level;
+        }
+
+        if processed != graph.node_count() {
+            return Err(anyhow!(
+                "Cycle detected: processed {} of {} nodes",
+                processed,
+                graph.node_count()
+            ));
+        }
+
+        Ok(levels)
+    }
+
+    /// Find independent subgraphs (connected components) using union-find on the undirected version.
+    fn find_independent_subgraphs(&self, graph: &TransactionGraph) -> Vec<Vec<NodeId>> {
+        let node_ids: Vec<NodeId> = graph.node_ids();
+        if node_ids.is_empty() {
+            return Vec::new();
+        }
+
+        let id_to_idx: HashMap<NodeId, usize> = node_ids
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| (id, i))
+            .collect();
+
+        // Union-Find.
+        let mut parent: Vec<usize> = (0..node_ids.len()).collect();
+        let mut rank: Vec<usize> = vec![0; node_ids.len()];
+
+        fn find(parent: &mut Vec<usize>, x: usize) -> usize {
+            if parent[x] != x {
+                parent[x] = find(parent, parent[x]);
+            }
+            parent[x]
+        }
+
+        fn union(parent: &mut [usize], rank: &mut [usize], a: usize, b: usize) {
+            let ra = find(parent, a);
+            let rb = find(parent, b);
+            if ra == rb {
+                return;
+            }
+            if rank[ra] < rank[rb] {
+                parent[ra] = rb;
+            } else if rank[ra] > rank[rb] {
+                parent[rb] = ra;
+            } else {
+                parent[rb] = ra;
+                rank[ra] += 1;
+            }
+        }
+
+        // Union nodes connected by edges.
+        for edge in &graph.edges {
+            if let (Some(&idx_a), Some(&idx_b)) =
+                (id_to_idx.get(&edge.from), id_to_idx.get(&edge.to))
+            {
