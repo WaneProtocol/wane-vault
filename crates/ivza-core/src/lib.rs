@@ -253,4 +253,101 @@ mod tests {
     ) -> InstructionData {
         let mut accounts = Vec::new();
         for r in reads {
-            accounts.push(AccountAccessEntry::read(*r));
+            accounts.push(AccountAccessEntry::read(*r));
+        }
+        for w in writes {
+            accounts.push(AccountAccessEntry::write(*w));
+        }
+        InstructionData::new(program, accounts, vec![0]).with_label(label)
+    }
+
+    #[test]
+    fn test_account_access_conflict() {
+        assert!(AccountAccess::Write.conflicts_with(&AccountAccess::Write));
+        assert!(AccountAccess::Write.conflicts_with(&AccountAccess::Read));
+        assert!(AccountAccess::Read.conflicts_with(&AccountAccess::Write));
+        assert!(!AccountAccess::Read.conflicts_with(&AccountAccess::Read));
+    }
+
+    #[test]
+    fn test_account_set_no_conflict() {
+        use crate::types::AccountSet;
+
+        let mut set_a = AccountSet::new();
+        set_a.add_read(make_pubkey(1));
+        set_a.add_read(make_pubkey(2));
+
+        let mut set_b = AccountSet::new();
+        set_b.add_read(make_pubkey(1));
+        set_b.add_read(make_pubkey(3));
+
+        assert!(!set_a.has_conflict(&set_b));
+    }
+
+    #[test]
+    fn test_account_set_write_conflict() {
+        use crate::types::AccountSet;
+
+        let mut set_a = AccountSet::new();
+        set_a.add_write(make_pubkey(1));
+
+        let mut set_b = AccountSet::new();
+        set_b.add_read(make_pubkey(1));
+
+        assert!(set_a.has_conflict(&set_b));
+    }
+
+    #[test]
+    fn test_graph_builder_and_topo_sort() {
+        use crate::graph::TransactionGraphBuilder;
+        use crate::types::DependencyType;
+
+        let program = make_pubkey(0);
+        let account_a = make_pubkey(1);
+        let account_b = make_pubkey(2);
+
+        let mut builder = TransactionGraphBuilder::new();
+
+        let ix1 = make_ix(program, &[account_a], &[], "read_a");
+        let ix2 = make_ix(program, &[], &[account_a], "write_a");
+        let ix3 = make_ix(program, &[account_b], &[], "read_b");
+
+        let n1 = builder.add_labeled_node("n1", vec![ix1]);
+        let n2 = builder.add_labeled_node("n2", vec![ix2]);
+        let n3 = builder.add_labeled_node("n3", vec![ix3]);
+
+        builder
+            .add_edge(n1, n2, DependencyType::DataDependency)
+            .unwrap();
+
+        let graph = builder.build().unwrap();
+
+        assert_eq!(graph.node_count(), 3);
+        assert_eq!(graph.edge_count(), 1);
+
+        let topo = graph.topological_sort().unwrap();
+        // n1 must come before n2. n3 can be anywhere.
+        let pos_n1 = topo.iter().position(|&x| x == n1).unwrap();
+        let pos_n2 = topo.iter().position(|&x| x == n2).unwrap();
+        assert!(pos_n1 < pos_n2);
+    }
+
+    #[test]
+    fn test_cycle_detection() {
+        use crate::graph::{GraphEdge, GraphNode, TransactionGraph};
+        use crate::types::DependencyType;
+
+        let mut graph = TransactionGraph::new();
+        let n0 = GraphNode::new(0, vec![]);
+        let n1 = GraphNode::new(1, vec![]);
+        graph.insert_node(n0);
+        graph.insert_node(n1);
+        graph
+            .add_edge(GraphEdge::new(0, 1, DependencyType::OrderDependency))
+            .unwrap();
+        graph
+            .add_edge(GraphEdge::new(1, 0, DependencyType::OrderDependency))
+            .unwrap();
+
+        assert!(graph.has_cycle());
+        assert!(graph.topological_sort().is_none());
