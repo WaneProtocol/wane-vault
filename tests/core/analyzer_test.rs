@@ -312,3 +312,316 @@ fn test_critical_path_uniform_duration() {
     // With uniform duration, makespan = 3 (one per node)
     assert_eq!(result.makespan, 3.0);
 }
+
+#[test]
+fn test_critical_path_empty_graph() {
+    let graph = TransactionGraph::new();
+    let analyzer = CriticalPathAnalyzer::new();
+    let result = analyzer.analyze(&graph).unwrap();
+
+    assert_eq!(result.makespan, 0.0);
+    assert!(result.critical_path.is_empty());
+}
+
+#[test]
+fn test_compute_depths() {
+    let mut graph = TransactionGraph::new();
+    for i in 0..4 {
+        graph.insert_node(GraphNode::new(i, vec![]));
+    }
+    // 0 -> 1, 0 -> 2, 1 -> 3
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(0, 2, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(1, 3, DependencyType::DataDependency))
+        .unwrap();
+
+    let analyzer = CriticalPathAnalyzer::new();
+    let depths = analyzer.compute_depths(&graph).unwrap();
+
+    assert_eq!(depths[&0], 0);
+    assert_eq!(depths[&1], 1);
+    assert_eq!(depths[&2], 1);
+    assert_eq!(depths[&3], 2);
+}
+
+#[test]
+fn test_nodes_by_slack() {
+    let mut graph = TransactionGraph::new();
+    graph.insert_node(GraphNode::new(0, vec![]).with_estimated_cu(100));
+    graph.insert_node(GraphNode::new(1, vec![]).with_estimated_cu(200));
+    graph.insert_node(GraphNode::new(2, vec![]).with_estimated_cu(50));
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(0, 2, DependencyType::DataDependency))
+        .unwrap();
+
+    let analyzer = CriticalPathAnalyzer::new();
+    let result = analyzer.analyze(&graph).unwrap();
+    let by_slack = result.nodes_by_slack();
+
+    // Nodes on critical path (slack=0) should come first
+    assert_eq!(by_slack[0].1, 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// ParallelismAnalyzer tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_parallelism_fully_parallel() {
+    let mut graph = TransactionGraph::new();
+    for i in 0..5 {
+        graph.insert_node(GraphNode::new(i, vec![]).with_estimated_cu(100));
+    }
+    // No edges: all nodes are independent
+    let analyzer = ParallelismAnalyzer::new();
+    let result = analyzer.analyze(&graph).unwrap();
+
+    assert_eq!(result.levels.len(), 1);
+    assert_eq!(result.max_parallelism, 5);
+    assert_eq!(result.depth, 1);
+    assert_eq!(result.avg_parallelism, 5.0);
+}
+
+#[test]
+fn test_parallelism_fully_sequential() {
+    let mut graph = TransactionGraph::new();
+    for i in 0..4 {
+        graph.insert_node(GraphNode::new(i, vec![]).with_estimated_cu(100));
+    }
+    for i in 0..3 {
+        graph
+            .add_edge(GraphEdge::new(i, i + 1, DependencyType::DataDependency))
+            .unwrap();
+    }
+
+    let analyzer = ParallelismAnalyzer::new();
+    let result = analyzer.analyze(&graph).unwrap();
+
+    assert_eq!(result.levels.len(), 4);
+    assert_eq!(result.max_parallelism, 1);
+    assert_eq!(result.depth, 4);
+    assert_eq!(result.avg_parallelism, 1.0);
+}
+
+#[test]
+fn test_parallelism_diamond() {
+    // 0 -> 1, 0 -> 2, 1 -> 3, 2 -> 3
+    let mut graph = TransactionGraph::new();
+    for i in 0..4 {
+        graph.insert_node(GraphNode::new(i, vec![]).with_estimated_cu(100));
+    }
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(0, 2, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(1, 3, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(2, 3, DependencyType::DataDependency))
+        .unwrap();
+
+    let analyzer = ParallelismAnalyzer::new();
+    let result = analyzer.analyze(&graph).unwrap();
+
+    assert_eq!(result.levels.len(), 3);
+    assert_eq!(result.max_parallelism, 2);
+    assert_eq!(result.levels[1].width(), 2);
+}
+
+#[test]
+fn test_parallelism_independent_subgraphs() {
+    let mut graph = TransactionGraph::new();
+    for i in 0..6 {
+        graph.insert_node(GraphNode::new(i, vec![]).with_estimated_cu(100));
+    }
+    // Subgraph 1: 0 -> 1 -> 2
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(1, 2, DependencyType::DataDependency))
+        .unwrap();
+    // Subgraph 2: 3 -> 4
+    graph
+        .add_edge(GraphEdge::new(3, 4, DependencyType::DataDependency))
+        .unwrap();
+    // Node 5 is standalone
+
+    let analyzer = ParallelismAnalyzer::new();
+    let result = analyzer.analyze(&graph).unwrap();
+
+    assert_eq!(result.independent_subgraphs.len(), 3);
+}
+
+#[test]
+fn test_parallelism_ratio_parallel() {
+    let mut graph = TransactionGraph::new();
+    graph.insert_node(GraphNode::new(0, vec![]).with_estimated_cu(100));
+    graph.insert_node(GraphNode::new(1, vec![]).with_estimated_cu(100));
+    // No edges: fully parallel
+
+    let analyzer = ParallelismAnalyzer::new();
+    let (seq, par, ratio) = analyzer.parallelism_ratio(&graph).unwrap();
+
+    assert_eq!(seq, 200.0);
+    assert_eq!(par, 100.0);
+    assert_eq!(ratio, 2.0);
+}
+
+#[test]
+fn test_parallelism_ratio_sequential() {
+    let mut graph = TransactionGraph::new();
+    graph.insert_node(GraphNode::new(0, vec![]).with_estimated_cu(100));
+    graph.insert_node(GraphNode::new(1, vec![]).with_estimated_cu(100));
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+        .unwrap();
+
+    let analyzer = ParallelismAnalyzer::new();
+    let (seq, par, ratio) = analyzer.parallelism_ratio(&graph).unwrap();
+
+    assert_eq!(seq, 200.0);
+    assert_eq!(par, 200.0); // Each level has only 1 node, max is 100 per level, sum is 200
+    assert_eq!(ratio, 1.0);
+}
+
+#[test]
+fn test_parallelism_empty_graph() {
+    let graph = TransactionGraph::new();
+    let analyzer = ParallelismAnalyzer::new();
+    let result = analyzer.analyze(&graph).unwrap();
+
+    assert_eq!(result.max_parallelism, 0);
+    assert_eq!(result.depth, 0);
+    assert!(result.levels.is_empty());
+}
+
+#[test]
+fn test_parallelism_efficiency() {
+    let mut graph = TransactionGraph::new();
+    // 3 nodes: 0 parallel with 1, both before 2
+    graph.insert_node(GraphNode::new(0, vec![]).with_estimated_cu(100));
+    graph.insert_node(GraphNode::new(1, vec![]).with_estimated_cu(100));
+    graph.insert_node(GraphNode::new(2, vec![]).with_estimated_cu(100));
+    graph
+        .add_edge(GraphEdge::new(0, 2, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(1, 2, DependencyType::DataDependency))
+        .unwrap();
+
+    let analyzer = ParallelismAnalyzer::new();
+    let result = analyzer.analyze(&graph).unwrap();
+
+    // Levels: {0,1}, {2} -> avg_par = 3/2 = 1.5, max_par = 2
+    assert_eq!(result.max_parallelism, 2);
+    assert_eq!(result.depth, 2);
+    assert!((result.avg_parallelism - 1.5).abs() < 0.01);
+    assert!((result.efficiency() - 0.75).abs() < 0.01);
+}
+
+#[test]
+fn test_parallelism_speedup() {
+    let mut graph = TransactionGraph::new();
+    for i in 0..4 {
+        graph.insert_node(GraphNode::new(i, vec![]).with_estimated_cu(100));
+    }
+    // No edges: all parallel, depth = 1
+    let analyzer = ParallelismAnalyzer::new();
+    let result = analyzer.analyze(&graph).unwrap();
+
+    assert_eq!(result.speedup(4), 4.0);
+}
+
+// ---------------------------------------------------------------------------
+// AccountAccessTracker tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_tracker_no_conflicts_all_reads() {
+    let mut tracker = AccountAccessTracker::new();
+    let account = make_pubkey(1);
+
+    tracker.record(account, 0, AccountAccess::Read);
+    tracker.record(account, 1, AccountAccess::Read);
+    tracker.record(account, 2, AccountAccess::Read);
+
+    let conflicts = tracker.find_conflicts();
+    assert!(conflicts.is_empty());
+}
+
+#[test]
+fn test_tracker_write_read_conflicts() {
+    let mut tracker = AccountAccessTracker::new();
+    let account = make_pubkey(1);
+
+    tracker.record(account, 0, AccountAccess::Write);
+    tracker.record(account, 1, AccountAccess::Read);
+    tracker.record(account, 2, AccountAccess::Read);
+
+    let conflicts = tracker.find_conflicts();
+    assert!(conflicts.len() >= 2); // (0,1) and (0,2)
+}
+
+#[test]
+fn test_tracker_write_write_conflicts() {
+    let mut tracker = AccountAccessTracker::new();
+    let account = make_pubkey(1);
+
+    tracker.record(account, 0, AccountAccess::Write);
+    tracker.record(account, 1, AccountAccess::Write);
+
+    let conflicts = tracker.find_conflicts();
+    assert_eq!(conflicts.len(), 1);
+}
+
+#[test]
+fn test_tracker_nodes_accessing() {
+    let mut tracker = AccountAccessTracker::new();
+    let account = make_pubkey(1);
+
+    tracker.record(account, 0, AccountAccess::Read);
+    tracker.record(account, 5, AccountAccess::Write);
+
+    let nodes = tracker.nodes_accessing(&account);
+    assert_eq!(nodes.len(), 2);
+    assert!(nodes.contains(&0));
+    assert!(nodes.contains(&5));
+}
+
+#[test]
+fn test_tracker_nodes_writing() {
+    let mut tracker = AccountAccessTracker::new();
+    let account = make_pubkey(1);
+
+    tracker.record(account, 0, AccountAccess::Read);
+    tracker.record(account, 1, AccountAccess::Write);
+    tracker.record(account, 2, AccountAccess::Read);
+
+    let writers = tracker.nodes_writing(&account);
+    assert_eq!(writers, vec![1]);
+}
+
+#[test]
+fn test_tracker_record_set() {
+    let mut tracker = AccountAccessTracker::new();
+    let mut set = AccountSet::new();
+    set.add_read(make_pubkey(1));
+    set.add_write(make_pubkey(2));
+
+    tracker.record_set(0, &set);
+
+    assert_eq!(tracker.tracked_account_count(), 2);
+    assert_eq!(tracker.nodes_writing(&make_pubkey(2)), vec![0]);
+}
