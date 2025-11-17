@@ -51,4 +51,58 @@ impl ExecutionLane {
             }
         }
         true
+    }
+
+    /// Add a node to this lane. Caller must ensure can_add() returned true.
+    pub fn add_node(&mut self, node: &GraphNode) {
+        self.node_ids.push(node.id);
+        self.combined_writes.extend(&node.account_set.writes);
+        self.combined_reads.extend(&node.account_set.reads);
+        self.total_cu += node.estimated_cu;
+    }
+
+    /// Returns the number of transactions in this lane.
+    pub fn width(&self) -> usize {
+        self.node_ids.len()
+    }
+
+    /// Returns true if the lane has no transactions.
+    pub fn is_empty(&self) -> bool {
+        self.node_ids.is_empty()
+    }
+}
+
+/// Assignment of a node to a lane.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LaneAssignment {
+    pub node_id: NodeId,
+    pub lane_index: usize,
+    pub position_in_lane: usize,
+}
+
+/// An execution plan: an ordered sequence of lanes that execute sequentially.
+/// Each lane contains transactions that are independent and can execute in parallel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionPlan {
+    /// Lanes in execution order.
+    pub lanes: Vec<ExecutionLane>,
+    /// Complete assignment map.
+    pub assignments: Vec<LaneAssignment>,
+    /// Total estimated CU across all lanes.
+    pub total_cu: u64,
+    /// Maximum parallelism (width of the widest lane).
+    pub max_parallelism: usize,
+    /// Total number of transactions.
+    pub total_transactions: usize,
+}
+
+impl ExecutionPlan {
+    pub fn new() -> Self {
+        Self {
+            lanes: Vec::new(),
+            assignments: Vec::new(),
+            total_cu: 0,
+            max_parallelism: 0,
+            total_transactions: 0,
+        }
     }
