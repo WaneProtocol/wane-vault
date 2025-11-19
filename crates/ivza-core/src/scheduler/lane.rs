@@ -105,4 +105,75 @@ impl ExecutionPlan {
             max_parallelism: 0,
             total_transactions: 0,
         }
-    }
+    }
+
+    /// Compute summary statistics from the lanes.
+    pub fn finalize(&mut self) {
+        self.total_cu = self.lanes.iter().map(|l| l.total_cu).sum();
+        self.max_parallelism = self.lanes.iter().map(|l| l.width()).max().unwrap_or(0);
+        self.total_transactions = self.lanes.iter().map(|l| l.width()).sum();
+    }
+
+    /// Returns the number of lanes (sequential steps).
+    pub fn num_lanes(&self) -> usize {
+        self.lanes.len()
+    }
+
+    /// Returns the average parallelism.
+    pub fn avg_parallelism(&self) -> f64 {
+        if self.lanes.is_empty() {
+            return 0.0;
+        }
+        self.total_transactions as f64 / self.lanes.len() as f64
+    }
+
+    /// Returns the estimated makespan: sum of max CU per lane.
+    pub fn estimated_makespan(&self) -> u64 {
+        self.lanes.iter().map(|l| l.total_cu).sum()
+    }
+
+    /// Returns the sequential cost (sum of all CUs).
+    pub fn sequential_cost(&self) -> u64 {
+        self.total_cu
+    }
+
+    /// Returns the speedup ratio.
+    pub fn speedup(&self) -> f64 {
+        let makespan = self.estimated_makespan();
+        if makespan == 0 {
+            return 1.0;
+        }
+        self.total_cu as f64 / makespan as f64
+    }
+
+    /// Returns a human-readable summary of the execution plan.
+    pub fn summary(&self) -> String {
+        let mut s = format!(
+            "ExecutionPlan: {} lanes, {} transactions, {} total CU\n",
+            self.num_lanes(),
+            self.total_transactions,
+            self.total_cu
+        );
+        s.push_str(&format!(
+            "  Max parallelism: {}, Avg parallelism: {:.2}\n",
+            self.max_parallelism,
+            self.avg_parallelism()
+        ));
+        for lane in &self.lanes {
+            s.push_str(&format!(
+                "  Lane {}: {} txs, {} CU, nodes: {:?}\n",
+                lane.index,
+                lane.width(),
+                lane.total_cu,
+                lane.node_ids
+            ));
+        }
+        s
+    }
+}
+
+impl Default for ExecutionPlan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
