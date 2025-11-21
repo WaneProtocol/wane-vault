@@ -103,4 +103,49 @@ impl PriorityScheduler {
                 node_id, priority, critical_score, cu_score, depth_score, is_critical
             );
 
-            priorities.insert(
+            priorities.insert(
+                node_id,
+                NodePriority {
+                    node_id,
+                    priority,
+                    critical_score,
+                    cu_score,
+                    depth_score,
+                    is_critical,
+                },
+            );
+        }
+
+        Ok(priorities)
+    }
+
+    /// Apply computed priorities back into the graph nodes.
+    pub fn apply_priorities(&self, graph: &mut TransactionGraph) -> Result<()> {
+        let priorities = self.compute_priorities(graph)?;
+
+        for (node_id, pri) in &priorities {
+            if let Some(node) = graph.nodes.get_mut(node_id) {
+                node.priority = pri.priority;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Return nodes sorted by priority (highest first).
+    pub fn sorted_nodes(&self, graph: &TransactionGraph) -> Result<Vec<(NodeId, i64)>> {
+        let priorities = self.compute_priorities(graph)?;
+        let mut sorted: Vec<(NodeId, i64)> = priorities
+            .iter()
+            .map(|(&id, pri)| (id, pri.priority))
+            .collect();
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
+        Ok(sorted)
+    }
+}
+
+impl Default for PriorityScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
