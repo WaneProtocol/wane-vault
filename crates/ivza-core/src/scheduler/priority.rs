@@ -50,4 +50,57 @@ impl PriorityScheduler {
         self.cu_weight = cu;
         self.depth_weight = depth;
         self
-    }
+    }
+
+    /// Compute priorities for all nodes in the graph.
+    pub fn compute_priorities(
+        &self,
+        graph: &TransactionGraph,
+    ) -> Result<HashMap<NodeId, NodePriority>> {
+        info!("Computing priorities for {} nodes", graph.node_count());
+
+        // Run critical path analysis.
+        let cpa = CriticalPathAnalyzer::new();
+        let cp_result = cpa.analyze(graph)?;
+        let depths = cpa.compute_depths(graph)?;
+
+        // Find max CU and max depth for normalization.
+        let max_cu = graph
+            .nodes
+            .values()
+            .map(|n| n.estimated_cu)
+            .max()
+            .unwrap_or(1) as f64;
+        let max_depth = depths.values().copied().max().unwrap_or(1) as f64;
+
+        let mut priorities = HashMap::new();
+
+        for &node_id in graph.nodes.keys() {
+            let is_critical = cp_result.is_critical(node_id);
+            let slack = cp_result.slack(node_id).unwrap_or(f64::MAX);
+
+            // Critical score: inversely proportional to slack.
+            // On critical path (slack=0) gets maximum score.
+            let max_slack = cp_result.makespan;
+            let critical_score = if max_slack > 0.0 {
+                ((1.0 - (slack / max_slack).min(1.0)) * self.critical_weight) as i64
+            } else {
+                self.critical_weight as i64
+            };
+
+            // CU score: proportional to estimated CU.
+            let cu = graph.nodes[&node_id].estimated_cu as f64;
+            let cu_score = ((cu / max_cu) * self.cu_weight) as i64;
+
+            // Depth score: proportional to depth.
+            let depth = depths.get(&node_id).copied().unwrap_or(0) as f64;
+            let depth_score = ((depth / max_depth) * self.depth_weight) as i64;
+
+            let priority = critical_score + cu_score + depth_score;
+
+            debug!(
+                "Node {}: priority={}, critical={}, cu={}, depth={}, is_critical={}",
+                node_id, priority, critical_score, cu_score, depth_score, is_critical
+            );
+
+            priorities.insert(
