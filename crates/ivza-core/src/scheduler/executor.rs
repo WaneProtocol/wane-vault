@@ -78,4 +78,85 @@ impl ExecutionPlanner {
         let mut lane_idx = 0;
 
         for par_level in &par_result.levels {
-            // Sort nodes within this level by priority (highest first).
+            // Sort nodes within this level by priority (highest first).
+            let mut level_nodes = par_level.nodes.clone();
+            level_nodes.sort_by(|a, b| {
+                let pri_a = priorities.get(a).map(|p| p.priority).unwrap_or(0);
+                let pri_b = priorities.get(b).map(|p| p.priority).unwrap_or(0);
+                pri_b.cmp(&pri_a)
+            });
+
+            // Greedy bin-packing: for each node, try to fit it into an existing
+            // lane for this level. If no lane fits, create a new one.
+            let mut level_lanes: Vec<ExecutionLane> = Vec::new();
+
+            for &node_id in &level_nodes {
+                let node = graph
+                    .nodes
+                    .get(&node_id)
+                    .ok_or_else(|| anyhow!("Node {} not found in graph", node_id))?;
+
+                let mut placed = false;
+                for lane in &mut level_lanes {
+                    if lane.width() >= self.max_lane_width {
+                        continue;
+                    }
+                    if lane.total_cu + node.estimated_cu > self.max_lane_cu {
+                        continue;
+                    }
+                    if lane.can_add(node) {
+                        lane.add_node(node);
+                        placed = true;
+                        debug!(
+                            "Placed node {} into lane {} (level {})",
+                            node_id, lane.index, par_level.level
+                        );
+                        break;
+                    }
+                }
+
+                if !placed {
+                    let mut new_lane = ExecutionLane::new(lane_idx);
+                    new_lane.add_node(node);
+                    debug!(
+                        "Created lane {} for node {} (level {})",
+                        lane_idx, node_id, par_level.level
+                    );
+                    level_lanes.push(new_lane);
+                    lane_idx += 1;
+                }
+            }
+
+            plan.lanes.extend(level_lanes);
+        }
+
+        // Build the assignment map.
+        for lane in &plan.lanes {
+            for (pos, &node_id) in lane.node_ids.iter().enumerate() {
+                plan.assignments.push(LaneAssignment {
+                    node_id,
+                    lane_index: lane.index,
+                    position_in_lane: pos,
+                });
+            }
+        }
+
+        plan.finalize();
+
+        info!(
+            "Execution plan: {} lanes, {} txs, max_par={}, avg_par={:.2}",
+            plan.num_lanes(),
+            plan.total_transactions,
+            plan.max_parallelism,
+            plan.avg_parallelism()
+        );
+
+        Ok(plan)
+    }
+
+    /// Create an optimized plan that attempts to merge lanes across levels
+    /// when no dependencies exist between them.
+    pub fn plan_optimized(&self, graph: &TransactionGraph) -> Result<ExecutionPlan> {
+        let base_plan = self.plan(graph)?;
+
+        if base_plan.lanes.len() <= 1 {
