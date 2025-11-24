@@ -159,4 +159,72 @@ impl ExecutionPlanner {
     pub fn plan_optimized(&self, graph: &TransactionGraph) -> Result<ExecutionPlan> {
         let base_plan = self.plan(graph)?;
 
-        if base_plan.lanes.len() <= 1 {
+        if base_plan.lanes.len() <= 1 {
+            return Ok(base_plan);
+        }
+
+        info!(
+            "Optimizing execution plan with {} lanes",
+            base_plan.lanes.len()
+        );
+
+        // Try to merge consecutive lanes if they don't conflict.
+        let mut merged_lanes: Vec<ExecutionLane> = Vec::new();
+        let mut current_lane = base_plan.lanes[0].clone();
+
+        for i in 1..base_plan.lanes.len() {
+            let next = &base_plan.lanes[i];
+            let can_merge = self.can_merge_lanes(&current_lane, next, graph);
+
+            if can_merge
+                && current_lane.width() + next.width() <= self.max_lane_width
+                && current_lane.total_cu + next.total_cu <= self.max_lane_cu
+            {
+                // Merge: add all nodes from next into current.
+                for &node_id in &next.node_ids {
+                    if let Some(node) = graph.nodes.get(&node_id) {
+                        current_lane.add_node(node);
+                    }
+                }
+                debug!(
+                    "Merged lane {} into lane {}",
+                    next.index, current_lane.index
+                );
+            } else {
+                merged_lanes.push(current_lane);
+                current_lane = next.clone();
+            }
+        }
+        merged_lanes.push(current_lane);
+
+        // Re-index lanes.
+        for (i, lane) in merged_lanes.iter_mut().enumerate() {
+            lane.index = i;
+        }
+
+        let mut plan = ExecutionPlan::new();
+        plan.lanes = merged_lanes;
+
+        // Rebuild assignments.
+        for lane in &plan.lanes {
+            for (pos, &node_id) in lane.node_ids.iter().enumerate() {
+                plan.assignments.push(LaneAssignment {
+                    node_id,
+                    lane_index: lane.index,
+                    position_in_lane: pos,
+                });
+            }
+        }
+
+        plan.finalize();
+
+        info!(
+            "Optimized plan: {} lanes (from {}), max_par={}",
+            plan.num_lanes(),
+            base_plan.lanes.len(),
+            plan.max_parallelism
+        );
+
+        Ok(plan)
+    }
+
