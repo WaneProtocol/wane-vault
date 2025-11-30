@@ -227,4 +227,44 @@ impl ExecutionPlanner {
 
         Ok(plan)
     }
-
+
+    /// Check if two lanes can be merged (no dependencies between their nodes).
+    fn can_merge_lanes(
+        &self,
+        lane_a: &ExecutionLane,
+        lane_b: &ExecutionLane,
+        graph: &TransactionGraph,
+    ) -> bool {
+        // Check that no node in lane_b depends on any node in lane_a, or vice versa.
+        let a_nodes: HashSet<NodeId> = lane_a.node_ids.iter().copied().collect();
+        let b_nodes: HashSet<NodeId> = lane_b.node_ids.iter().copied().collect();
+
+        for edge in &graph.edges {
+            let from_in_a = a_nodes.contains(&edge.from);
+            let to_in_b = b_nodes.contains(&edge.to);
+            let from_in_b = b_nodes.contains(&edge.from);
+            let to_in_a = a_nodes.contains(&edge.to);
+
+            if (from_in_a && to_in_b) || (from_in_b && to_in_a) {
+                return false;
+            }
+        }
+
+        // Also check account conflicts between the two lanes.
+        for &b_id in &lane_b.node_ids {
+            if let Some(b_node) = graph.nodes.get(&b_id) {
+                if !lane_a.can_add(b_node) {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+}
+
+impl Default for ExecutionPlanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
