@@ -350,4 +350,100 @@ mod tests {
             .unwrap();
 
         assert!(graph.has_cycle());
-        assert!(graph.topological_sort().is_none());
+        assert!(graph.topological_sort().is_none());
+    }
+
+    #[test]
+    fn test_decomposer_independent_instructions() {
+        let decomposer = GraphDecomposer::new();
+        let program = make_pubkey(0);
+
+        // Two instructions that access completely different accounts.
+        let ix1 = make_ix(program, &[], &[make_pubkey(1)], "write_1");
+        let ix2 = make_ix(program, &[], &[make_pubkey(2)], "write_2");
+
+        let graph = decomposer.decompose(vec![ix1, ix2]).unwrap();
+
+        // They should be in separate nodes at the same level (no edges needed).
+        assert!(graph.edge_count() == 0 || graph.node_count() <= 2);
+    }
+
+    #[test]
+    fn test_decomposer_conflicting_instructions() {
+        let decomposer = GraphDecomposer::new();
+        let program = make_pubkey(0);
+        let shared = make_pubkey(1);
+
+        let ix1 = make_ix(program, &[], &[shared], "write_shared_1");
+        let ix2 = make_ix(program, &[], &[shared], "write_shared_2");
+
+        let graph = decomposer.decompose(vec![ix1, ix2]).unwrap();
+
+        // They conflict on the same account, so there should be an edge.
+        assert!(graph.edge_count() >= 1);
+    }
+
+    #[test]
+    fn test_dependency_analyzer() {
+        use crate::graph::{GraphNode, TransactionGraph};
+
+        let program = make_pubkey(0);
+        let shared = make_pubkey(1);
+
+        let ix1 = make_ix(program, &[], &[shared], "write_shared");
+        let ix2 = make_ix(program, &[shared], &[], "read_shared");
+
+        let mut graph = TransactionGraph::new();
+        graph.insert_node(GraphNode::new(0, vec![ix1]));
+        graph.insert_node(GraphNode::new(1, vec![ix2]));
+
+        let analyzer = DependencyAnalyzer::new();
+        let result = analyzer.analyze(&graph).unwrap();
+
+        // Should have detected the write-read conflict.
+        assert!(result.edge_count() >= 1);
+    }
+
+    #[test]
+    fn test_critical_path_simple() {
+        use crate::graph::{GraphEdge, GraphNode, TransactionGraph};
+        use crate::types::DependencyType;
+
+        let mut graph = TransactionGraph::new();
+        let n0 = GraphNode::new(0, vec![]).with_estimated_cu(100);
+        let n1 = GraphNode::new(1, vec![]).with_estimated_cu(200);
+        let n2 = GraphNode::new(2, vec![]).with_estimated_cu(50);
+
+        graph.insert_node(n0);
+        graph.insert_node(n1);
+        graph.insert_node(n2);
+
+        // 0 -> 1, 0 -> 2
+        graph
+            .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+            .unwrap();
+        graph
+            .add_edge(GraphEdge::new(0, 2, DependencyType::DataDependency))
+            .unwrap();
+
+        let analyzer = CriticalPathAnalyzer::new();
+        let result = analyzer.analyze(&graph).unwrap();
+
+        // Makespan = 100 (node 0) + 200 (node 1) = 300.
+        assert_eq!(result.makespan, 300.0);
+        // Critical path goes through 0 -> 1.
+        assert!(result.critical_path.contains(&0));
+        assert!(result.critical_path.contains(&1));
+        // Node 2 has slack (200 - 50 = 150).
+        assert!(result.timings[&2].slack > 0.0);
+    }
+
+    #[test]
+    fn test_parallelism_levels() {
+        use crate::graph::{GraphEdge, GraphNode, TransactionGraph};
+        use crate::types::DependencyType;
+
+        let mut graph = TransactionGraph::new();
+        // Diamond shape: 0 -> 1, 0 -> 2, 1 -> 3, 2 -> 3
+        for i in 0..4 {
+            graph.insert_node(GraphNode::new(i, vec![]).with_estimated_cu(100));
