@@ -138,4 +138,110 @@ impl Route {
     /// Returns the sequence of token mints visited (including start and end).
     pub fn token_path(&self) -> Vec<Pubkey> {
         let mut path = vec![self.input_mint];
-        for hop in &self.hops {
+        for hop in &self.hops {
+            path.push(hop.output_mint);
+        }
+        path
+    }
+
+    /// Returns all pool addresses used in this route.
+    pub fn pool_addresses(&self) -> Vec<Pubkey> {
+        self.hops.iter().map(|h| h.pool_address).collect()
+    }
+
+    /// Effective exchange rate (output per unit input).
+    pub fn exchange_rate(&self) -> f64 {
+        if self.input_amount == 0 {
+            return 0.0;
+        }
+        self.output_amount as f64 / self.input_amount as f64
+    }
+}
+
+impl fmt::Display for Route {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Route({} hops, in={}, out={}, impact={:.4}%, score={:.6})",
+            self.hops.len(),
+            self.input_amount,
+            self.output_amount,
+            self.total_price_impact * 100.0,
+            self.score,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dijkstra state
+// ---------------------------------------------------------------------------
+
+/// State entry for Dijkstra's priority queue.  We maximize output, so we
+/// negate the output for min-heap ordering.
+#[derive(Debug, Clone)]
+struct DijkstraState {
+    /// Current token.
+    token: Pubkey,
+    /// Output amount reaching this token.
+    amount: u64,
+    /// Hops taken so far.
+    hops: Vec<RouteHop>,
+}
+
+impl Eq for DijkstraState {}
+
+impl PartialEq for DijkstraState {
+    fn eq(&self, other: &Self) -> bool {
+        self.amount == other.amount
+    }
+}
+
+impl Ord for DijkstraState {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Reverse: we want the *largest* amount first in a max-heap.
+        self.amount.cmp(&other.amount)
+    }
+}
+
+impl PartialOrd for DijkstraState {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RouteEngine
+// ---------------------------------------------------------------------------
+
+/// Configuration for the route engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteConfig {
+    /// Maximum number of hops per route.
+    pub max_hops: usize,
+    /// Maximum number of routes to return from find_routes.
+    pub max_routes: usize,
+    /// Minimum output amount to consider a route valid (in output token units).
+    pub min_output: u64,
+    /// Maximum acceptable price impact (0.0 to 1.0).
+    pub max_price_impact: f64,
+    /// Whether to include CLMM pools.
+    pub include_clmm: bool,
+    /// Whether to include orderbook pools.
+    pub include_orderbook: bool,
+}
+
+impl Default for RouteConfig {
+    fn default() -> Self {
+        Self {
+            max_hops: MAX_HOPS,
+            max_routes: MAX_CANDIDATE_ROUTES,
+            min_output: 1,
+            max_price_impact: 0.50,
+            include_clmm: true,
+            include_orderbook: true,
+        }
+    }
+}
+
+/// The main route-finding engine.
+pub struct RouteEngine {
