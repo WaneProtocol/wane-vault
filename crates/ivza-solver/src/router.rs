@@ -244,4 +244,110 @@ impl Default for RouteConfig {
 }
 
 /// The main route-finding engine.
-pub struct RouteEngine {
+pub struct RouteEngine {
+    /// Pool registry for looking up pool data.
+    pub registry: PoolRegistry,
+    /// Configuration.
+    pub config: RouteConfig,
+}
+
+impl RouteEngine {
+    pub fn new(registry: PoolRegistry) -> Self {
+        Self {
+            registry,
+            config: RouteConfig::default(),
+        }
+    }
+
+    pub fn with_config(mut self, config: RouteConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Find multiple routes from input_mint to output_mint for the given amount.
+    ///
+    /// Uses a modified Dijkstra's algorithm that explores multiple paths and
+    /// returns them sorted by score (best first).
+    pub fn find_routes(
+        &self,
+        input_mint: &Pubkey,
+        output_mint: &Pubkey,
+        amount: u64,
+    ) -> Result<Vec<Route>> {
+        if input_mint == output_mint {
+            return Err(anyhow!("Input and output mints are the same"));
+        }
+        if amount == 0 {
+            return Err(anyhow!("Amount must be greater than zero"));
+        }
+
+        let graph = self.registry.build_graph();
+
+        if !graph.tokens.contains(input_mint) {
+            return Err(anyhow!("Input mint {} not found in pool graph", input_mint));
+        }
+        if !graph.tokens.contains(output_mint) {
+            return Err(anyhow!(
+                "Output mint {} not found in pool graph",
+                output_mint
+            ));
+        }
+
+        let mut completed_routes: Vec<Route> = Vec::new();
+
+        // Dijkstra-like BFS with a max-heap on output amount.
+        let mut heap = BinaryHeap::new();
+        heap.push(DijkstraState {
+            token: *input_mint,
+            amount,
+            hops: Vec::new(),
+        });
+
+        // Track the best amount seen at each (token, hop_count) to prune.
+        let mut best_at: HashMap<(Pubkey, usize), u64> = HashMap::new();
+        best_at.insert((*input_mint, 0), amount);
+
+        let mut iterations = 0u32;
+        let max_iterations = 5_000u32;
+
+        while let Some(state) = heap.pop() {
+            iterations += 1;
+            if iterations > max_iterations {
+                debug!("Route search hit iteration limit");
+                break;
+            }
+
+            if completed_routes.len() >= self.config.max_routes {
+                break;
+            }
+
+            // If we've reached the output token, record the route.
+            if state.token == *output_mint && !state.hops.is_empty() {
+                let route = Route::from_hops(state.hops);
+                if route.output_amount >= self.config.min_output
+                    && route.total_price_impact <= self.config.max_price_impact
+                {
+                    completed_routes.push(route);
+                }
+                continue;
+            }
+
+            if state.hops.len() >= self.config.max_hops {
+                continue;
+            }
+
+            // Explore neighbors.
+            let edges = match graph.adjacency.get(&state.token) {
+                Some(e) => e,
+                None => continue,
+            };
+
+            // Avoid revisiting tokens already in the path (no cycles).
+            let visited: HashSet<Pubkey> = state
+                .hops
+                .iter()
+                .map(|h| h.input_mint)
+                .chain(std::iter::once(state.token))
+                .collect();
+
+            for edge in edges {
