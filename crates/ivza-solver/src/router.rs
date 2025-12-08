@@ -350,4 +350,145 @@ impl RouteEngine {
                 .chain(std::iter::once(state.token))
                 .collect();
 
-            for edge in edges {
+            for edge in edges {
+                if visited.contains(&edge.token_out) {
+                    continue;
+                }
+
+                // Filter by pool type.
+                if !self.config.include_clmm && edge.pool_type == PoolType::Clmm {
+                    continue;
+                }
+                if !self.config.include_orderbook && edge.pool_type == PoolType::Orderbook {
+                    continue;
+                }
+
+                // Compute output for this edge.
+                let output = self.compute_edge_output(edge, state.amount);
+                if output == 0 {
+                    continue;
+                }
+
+                // Prune if we've already found a better path to this token at this depth.
+                let key = (edge.token_out, state.hops.len() + 1);
+                let prev_best = best_at.get(&key).copied().unwrap_or(0);
+                if output <= prev_best {
+                    continue;
+                }
+                best_at.insert(key, output);
+
+                let impact = calculate_price_impact(
+                    edge.reserve_in,
+                    edge.reserve_out,
+                    state.amount,
+                    edge.fee_bps,
+                );
+
+                let hop = RouteHop {
+                    pool_address: edge.pool_address,
+                    input_mint: edge.token_in,
+                    output_mint: edge.token_out,
+                    input_amount: state.amount,
+                    output_amount: output,
+                    fee_bps: edge.fee_bps,
+                    pool_type: edge.pool_type,
+                    price_impact: impact,
+                };
+
+                let mut new_hops = state.hops.clone();
+                new_hops.push(hop);
+
+                heap.push(DijkstraState {
+                    token: edge.token_out,
+                    amount: output,
+                    hops: new_hops,
+                });
+            }
+        }
+
+        // Sort by score descending.
+        completed_routes.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+
+        info!(
+            "Found {} routes from {} to {} for amount {}",
+            completed_routes.len(),
+            &input_mint.to_string()[..8],
+            &output_mint.to_string()[..8],
+            amount,
+        );
+
+        Ok(completed_routes)
+    }
+
+    /// Find the single best route (highest score).
+    pub fn find_best_route(
+        &self,
+        input_mint: &Pubkey,
+        output_mint: &Pubkey,
+        amount: u64,
+    ) -> Result<Route> {
+        let routes = self.find_routes(input_mint, output_mint, amount)?;
+        routes.into_iter().next().ok_or_else(|| {
+            anyhow!(
+                "No valid route found from {} to {}",
+                input_mint,
+                output_mint
+            )
+        })
+    }
+
+    /// Compute the output for a single pool edge.
+    fn compute_edge_output(&self, edge: &crate::pool::PoolEdge, amount_in: u64) -> u64 {
+        match edge.pool_type {
+            PoolType::ConstantProduct | PoolType::Orderbook => {
+                calculate_output(edge.reserve_in, edge.reserve_out, amount_in, edge.fee_bps)
+            }
+            PoolType::Clmm => {
+                // For CLMM we need the full pool info with tick ranges.
+                if let Some(pool) = self.registry.get(&edge.pool_address) {
+                    if pool.tick_ranges.is_empty() {
+                        // Fall back to constant-product approximation.
+                        return calculate_output(
+                            edge.reserve_in,
+                            edge.reserve_out,
+                            amount_in,
+                            edge.fee_bps,
+                        );
+                    }
+                    let a_to_b = edge.token_in == pool.token_a;
+                    let (out, _) = calculate_clmm_output(
+                        &pool.tick_ranges,
+                        pool.current_tick,
+                        amount_in,
+                        a_to_b,
+                        pool.fee_bps,
+                    );
+                    out
+                } else {
+                    calculate_output(edge.reserve_in, edge.reserve_out, amount_in, edge.fee_bps)
+                }
+            }
+        }
+    }
+
+    /// Score a route considering output amount, price impact, hop count, and pool depth.
+    pub fn score_route(&self, route: &Route) -> f64 {
+        if route.input_amount == 0 {
+            return 0.0;
+        }
+
+        let output_ratio = route.output_amount as f64 / route.input_amount as f64;
+        let hop_penalty = 0.995_f64.powi(route.hop_count() as i32 - 1);
+        let impact_factor = 1.0 - route.total_price_impact;
+
+        // Pool depth factor: penalize routes through shallow pools.
+        let depth_factor = route
+            .hops
+            .iter()
+            .map(|hop| {
+                let pool = self.registry.get(&hop.pool_address);
+                match pool {
+                    Some(p) => {
+                        let depth = p.reserve_a.min(p.reserve_b) as f64;
+                        let ratio = hop.input_amount as f64 / depth.max(1.0);
+                        // If the trade is a large fraction of the pool, penalize.
