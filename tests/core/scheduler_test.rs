@@ -283,3 +283,288 @@ fn test_priority_scheduler_sorted_nodes() {
     // Should be sorted by priority descending
     for window in sorted.windows(2) {
         assert!(window[0].1 >= window[1].1);
+    }
+}
+
+#[test]
+fn test_priority_scheduler_custom_weights() {
+    let mut graph = TransactionGraph::new();
+    graph.insert_node(GraphNode::new(0, vec![]).with_estimated_cu(100));
+
+    let scheduler = PriorityScheduler::new().with_weights(200.0, 100.0, 50.0);
+    let priorities = scheduler.compute_priorities(&graph).unwrap();
+
+    // With higher weights, the scores should reflect the increased weights
+    assert!(priorities.contains_key(&0));
+}
+
+// ---------------------------------------------------------------------------
+// ExecutionPlanner tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_planner_empty_graph() {
+    let graph = TransactionGraph::new();
+    let planner = ExecutionPlanner::new();
+    let plan = planner.plan(&graph).unwrap();
+
+    assert_eq!(plan.num_lanes(), 0);
+    assert_eq!(plan.total_transactions, 0);
+}
+
+#[test]
+fn test_planner_single_node() {
+    let mut graph = TransactionGraph::new();
+    graph.insert_node(GraphNode::new(0, vec![]).with_estimated_cu(100));
+
+    let planner = ExecutionPlanner::new();
+    let plan = planner.plan(&graph).unwrap();
+
+    assert_eq!(plan.num_lanes(), 1);
+    assert_eq!(plan.total_transactions, 1);
+}
+
+#[test]
+fn test_planner_chain_produces_sequential_lanes() {
+    let mut graph = TransactionGraph::new();
+    for i in 0..3 {
+        graph.insert_node(GraphNode::new(i, vec![]).with_estimated_cu(100));
+    }
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(1, 2, DependencyType::DataDependency))
+        .unwrap();
+
+    let planner = ExecutionPlanner::new();
+    let plan = planner.plan(&graph).unwrap();
+
+    // Each node in its own level/lane
+    assert!(plan.num_lanes() >= 3);
+    assert_eq!(plan.total_transactions, 3);
+}
+
+#[test]
+fn test_planner_parallel_nodes_in_same_lane() {
+    let program = make_pubkey(0);
+
+    let mut graph = TransactionGraph::new();
+    // 3 independent nodes (no shared accounts)
+    graph.insert_node(GraphNode::new(
+        0,
+        vec![make_ix(program, &[], &[make_pubkey(1)], "w1")],
+    ));
+    graph.insert_node(GraphNode::new(
+        1,
+        vec![make_ix(program, &[], &[make_pubkey(2)], "w2")],
+    ));
+    graph.insert_node(GraphNode::new(
+        2,
+        vec![make_ix(program, &[], &[make_pubkey(3)], "w3")],
+    ));
+
+    let planner = ExecutionPlanner::new();
+    let plan = planner.plan(&graph).unwrap();
+
+    // All nodes are independent and should be packed into a single lane
+    assert_eq!(plan.num_lanes(), 1);
+    assert_eq!(plan.total_transactions, 3);
+}
+
+#[test]
+fn test_planner_conflicting_nodes_separate_lanes() {
+    let program = make_pubkey(0);
+    let shared = make_pubkey(1);
+
+    let mut graph = TransactionGraph::new();
+    graph.insert_node(GraphNode::new(
+        0,
+        vec![make_ix(program, &[], &[shared], "w1")],
+    ));
+    graph.insert_node(GraphNode::new(
+        1,
+        vec![make_ix(program, &[], &[shared], "w2")],
+    ));
+
+    // Add dependency edge
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+        .unwrap();
+
+    let planner = ExecutionPlanner::new();
+    let plan = planner.plan(&graph).unwrap();
+
+    // Should be in separate lanes since they conflict
+    assert!(plan.num_lanes() >= 2);
+}
+
+#[test]
+fn test_planner_diamond_graph() {
+    let program = make_pubkey(0);
+
+    let mut graph = TransactionGraph::new();
+    graph.insert_node(GraphNode::new(
+        0,
+        vec![make_ix(program, &[], &[make_pubkey(1)], "w1")],
+    ));
+    graph.insert_node(GraphNode::new(
+        1,
+        vec![make_ix(program, &[], &[make_pubkey(2)], "w2")],
+    ));
+    graph.insert_node(GraphNode::new(
+        2,
+        vec![make_ix(program, &[], &[make_pubkey(3)], "w3")],
+    ));
+    graph.insert_node(GraphNode::new(
+        3,
+        vec![make_ix(program, &[make_pubkey(2), make_pubkey(3)], &[], "r23")],
+    ));
+
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(0, 2, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(1, 3, DependencyType::DataDependency))
+        .unwrap();
+    graph
+        .add_edge(GraphEdge::new(2, 3, DependencyType::DataDependency))
+        .unwrap();
+
+    let planner = ExecutionPlanner::new();
+    let plan = planner.plan(&graph).unwrap();
+
+    assert_eq!(plan.total_transactions, 4);
+    // Nodes 1 and 2 can run in parallel, so expect >= 2 and <= 4 lanes
+    assert!(plan.num_lanes() >= 2);
+}
+
+#[test]
+fn test_planner_max_lane_width() {
+    let planner = ExecutionPlanner::new().with_max_lane_width(1);
+
+    let mut graph = TransactionGraph::new();
+    for i in 0..3 {
+        graph.insert_node(GraphNode::new(i, vec![]).with_estimated_cu(100));
+    }
+
+    let plan = planner.plan(&graph).unwrap();
+    // With max width 1, each node gets its own lane
+    assert_eq!(plan.num_lanes(), 3);
+}
+
+#[test]
+fn test_planner_optimized() {
+    let program = make_pubkey(0);
+
+    let mut graph = TransactionGraph::new();
+    graph.insert_node(GraphNode::new(
+        0,
+        vec![make_ix(program, &[], &[make_pubkey(1)], "w1")],
+    ));
+    graph.insert_node(GraphNode::new(
+        1,
+        vec![make_ix(program, &[], &[make_pubkey(2)], "w2")],
+    ));
+
+    let planner = ExecutionPlanner::new();
+    let plan = planner.plan_optimized(&graph).unwrap();
+
+    assert_eq!(plan.total_transactions, 2);
+    // Optimization may merge lanes
+    assert!(plan.num_lanes() >= 1);
+}
+
+// ---------------------------------------------------------------------------
+// Full IvzaEngine pipeline tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_engine_process_independent() {
+    let engine = IvzaEngine::new();
+    let program = make_pubkey(0);
+
+    let ix1 = make_ix(program, &[], &[make_pubkey(1)], "w1");
+    let ix2 = make_ix(program, &[], &[make_pubkey(2)], "w2");
+
+    let plan = engine.process(vec![ix1, ix2]).unwrap();
+
+    assert!(plan.total_transactions >= 2);
+    assert!(plan.num_lanes() >= 1);
+}
+
+#[test]
+fn test_engine_process_conflicting() {
+    let engine = IvzaEngine::new();
+    let program = make_pubkey(0);
+    let shared = make_pubkey(1);
+
+    let ix1 = make_ix(program, &[], &[shared], "w_shared_1");
+    let ix2 = make_ix(program, &[], &[shared], "w_shared_2");
+
+    let plan = engine.process(vec![ix1, ix2]).unwrap();
+
+    assert_eq!(plan.total_transactions, 2);
+    // Conflicting instructions should produce multiple lanes
+    assert!(plan.num_lanes() >= 2);
+}
+
+#[test]
+fn test_engine_process_graph() {
+    let engine = IvzaEngine::new();
+
+    let mut graph = TransactionGraph::new();
+    graph.insert_node(GraphNode::new(0, vec![]).with_estimated_cu(100));
+    graph.insert_node(GraphNode::new(1, vec![]).with_estimated_cu(200));
+    graph
+        .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+        .unwrap();
+
+    let plan = engine.process_graph(&graph).unwrap();
+    assert_eq!(plan.total_transactions, 2);
+}
+
+#[test]
+fn test_engine_process_optimized() {
+    let engine = IvzaEngine::new();
+    let program = make_pubkey(0);
+
+    let ix1 = make_ix(program, &[], &[make_pubkey(1)], "w1");
+    let ix2 = make_ix(program, &[], &[make_pubkey(2)], "w2");
+
+    let plan = engine.process_optimized(vec![ix1, ix2]).unwrap();
+    assert!(plan.total_transactions >= 2);
+}
+
+#[test]
+fn test_engine_parallelism_summary() {
+    let engine = IvzaEngine::new();
+    let program = make_pubkey(0);
+
+    let ix1 = make_ix(program, &[], &[make_pubkey(1)], "w1");
+    let ix2 = make_ix(program, &[], &[make_pubkey(2)], "w2");
+    let ix3 = make_ix(program, &[make_pubkey(1)], &[make_pubkey(3)], "rw");
+
+    let summary = engine.parallelism_summary(vec![ix1, ix2, ix3]).unwrap();
+
+    assert!(summary.total_nodes >= 2);
+    assert!(summary.speedup_ratio >= 1.0);
+    assert!(summary.num_lanes >= 1);
+
+    // Test Display impl
+    let display = format!("{}", summary);
+    assert!(display.contains("iVZA Parallelism Summary"));
+}
+
+#[test]
+fn test_engine_default() {
+    let engine = IvzaEngine::default();
+    // Should work the same as ::new()
+    let program = make_pubkey(0);
+    let ix = make_ix(program, &[], &[make_pubkey(1)], "w1");
+    let plan = engine.process(vec![ix]).unwrap();
+    assert_eq!(plan.total_transactions, 1);
+}
