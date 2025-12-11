@@ -597,4 +597,110 @@ mod tests {
 
         // RAY/USDC pool.
         registry.register(PoolInfo::constant_product(
-            make_pubkey(13),
+            make_pubkey(13),
+            ray,
+            usdc,
+            5_000_000_000,
+            3_750_000_000,
+            30,
+        ));
+
+        registry
+    }
+
+    #[test]
+    fn test_find_direct_route() {
+        let registry = setup_registry();
+        let engine = RouteEngine::new(registry);
+
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+
+        let routes = engine.find_routes(&sol, &usdc, 1_000_000).unwrap();
+        assert!(!routes.is_empty());
+
+        let best = &routes[0];
+        assert_eq!(best.input_mint, sol);
+        assert_eq!(best.output_mint, usdc);
+        assert!(best.output_amount > 0);
+        assert!(best.hop_count() >= 1);
+    }
+
+    #[test]
+    fn test_find_multihop_route() {
+        let registry = setup_registry();
+        let engine = RouteEngine::new(registry);
+
+        let sol = make_pubkey(1);
+        let usdt = make_pubkey(3);
+
+        // SOL -> USDC -> USDT is a 2-hop route.
+        let routes = engine.find_routes(&sol, &usdt, 1_000_000).unwrap();
+        assert!(!routes.is_empty());
+
+        // At least one route should be multi-hop.
+        let has_multihop = routes.iter().any(|r| r.hop_count() >= 2);
+        assert!(has_multihop);
+    }
+
+    #[test]
+    fn test_best_route() {
+        let registry = setup_registry();
+        let engine = RouteEngine::new(registry);
+
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+
+        let best = engine.find_best_route(&sol, &usdc, 1_000_000).unwrap();
+        assert!(best.output_amount > 0);
+        assert!(best.score > 0.0);
+    }
+
+    #[test]
+    fn test_no_route() {
+        let registry = PoolRegistry::new();
+        // Only register one pool.
+        registry.register(PoolInfo::constant_product(
+            make_pubkey(10),
+            make_pubkey(1),
+            make_pubkey(2),
+            1000,
+            2000,
+            30,
+        ));
+        let engine = RouteEngine::new(registry);
+
+        // Try to route between unconnected tokens.
+        let result = engine.find_routes(&make_pubkey(1), &make_pubkey(99), 1000);
+        assert!(result.is_err() || result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_routes_sorted_by_score() {
+        let registry = setup_registry();
+        let engine = RouteEngine::new(registry);
+
+        let sol = make_pubkey(1);
+        let usdt = make_pubkey(3);
+
+        let routes = engine.find_routes(&sol, &usdt, 1_000_000).unwrap();
+        for window in routes.windows(2) {
+            assert!(window[0].score >= window[1].score);
+        }
+    }
+
+    #[test]
+    fn test_requote_route() {
+        let registry = setup_registry();
+        let engine = RouteEngine::new(registry);
+
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+
+        let original = engine.find_best_route(&sol, &usdc, 1_000_000).unwrap();
+        let requoted = engine.requote_route(&original).unwrap();
+
+        // Same reserves, so requote should give the same output.
+        assert_eq!(original.output_amount, requoted.output_amount);
+    }
+}
