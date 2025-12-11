@@ -491,4 +491,110 @@ impl RouteEngine {
                     Some(p) => {
                         let depth = p.reserve_a.min(p.reserve_b) as f64;
                         let ratio = hop.input_amount as f64 / depth.max(1.0);
-                        // If the trade is a large fraction of the pool, penalize.
+                        // If the trade is a large fraction of the pool, penalize.
+                        (1.0 - ratio * 0.5).max(0.1)
+                    }
+                    None => 0.5,
+                }
+            })
+            .fold(1.0, |acc, f| acc * f);
+
+        output_ratio * hop_penalty * impact_factor * depth_factor
+    }
+
+    /// Re-quote a route with potentially updated pool reserves.
+    pub fn requote_route(&self, route: &Route) -> Result<Route> {
+        let mut current_amount = route.input_amount;
+        let mut new_hops = Vec::with_capacity(route.hop_count());
+
+        for hop in &route.hops {
+            let pool = self
+                .registry
+                .get(&hop.pool_address)
+                .ok_or_else(|| anyhow!("Pool {} no longer available", hop.pool_address))?;
+
+            let (reserve_in, reserve_out) = if hop.input_mint == pool.token_a {
+                (pool.reserve_a, pool.reserve_b)
+            } else {
+                (pool.reserve_b, pool.reserve_a)
+            };
+
+            let output = calculate_output(reserve_in, reserve_out, current_amount, pool.fee_bps);
+            if output == 0 {
+                return Err(anyhow!(
+                    "Route hop through pool {} now returns zero output",
+                    hop.pool_address
+                ));
+            }
+
+            let impact =
+                calculate_price_impact(reserve_in, reserve_out, current_amount, pool.fee_bps);
+
+            new_hops.push(RouteHop {
+                pool_address: hop.pool_address,
+                input_mint: hop.input_mint,
+                output_mint: hop.output_mint,
+                input_amount: current_amount,
+                output_amount: output,
+                fee_bps: pool.fee_bps,
+                pool_type: pool.pool_type,
+                price_impact: impact,
+            });
+
+            current_amount = output;
+        }
+
+        Ok(Route::from_hops(new_hops))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pool::PoolInfo;
+
+    fn make_pubkey(seed: u8) -> Pubkey {
+        Pubkey::new_from_array([seed; 32])
+    }
+
+    fn setup_registry() -> PoolRegistry {
+        let registry = PoolRegistry::new();
+
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+        let usdt = make_pubkey(3);
+        let ray = make_pubkey(4);
+
+        // SOL/USDC pool with decent liquidity.
+        registry.register(PoolInfo::constant_product(
+            make_pubkey(10),
+            sol,
+            usdc,
+            1_000_000_000,   // 1B SOL
+            150_000_000_000, // 150B USDC (price ~150)
+            30,
+        ));
+
+        // USDC/USDT pool (stablecoin, tight spread).
+        registry.register(PoolInfo::constant_product(
+            make_pubkey(11),
+            usdc,
+            usdt,
+            500_000_000_000,
+            500_000_000_000,
+            5,
+        ));
+
+        // SOL/RAY pool.
+        registry.register(PoolInfo::constant_product(
+            make_pubkey(12),
+            sol,
+            ray,
+            2_000_000_000,
+            10_000_000_000,
+            30,
+        ));
+
+        // RAY/USDC pool.
+        registry.register(PoolInfo::constant_product(
+            make_pubkey(13),
