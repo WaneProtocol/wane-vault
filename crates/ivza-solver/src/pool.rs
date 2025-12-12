@@ -496,4 +496,254 @@ pub fn calculate_clmm_output(
             let max_a = if effective_sqrt > sqrt_lower {
                 liquidity * (1.0 / sqrt_lower - 1.0 / effective_sqrt)
             } else {
-                0.0
+                0.0
+            };
+
+            let consumed = remaining.min(max_a);
+            if consumed <= 0.0 {
+                continue;
+            }
+
+            // New sqrt price after consuming `consumed` of token A.
+            // 1/sqrt_new = 1/sqrt_current + consumed/L
+            let inv_new = 1.0 / effective_sqrt + consumed / liquidity;
+            let new_sqrt = 1.0 / inv_new;
+
+            // Output of token B: delta_b = L * (sqrt_current - sqrt_new)
+            let delta_b = liquidity * (effective_sqrt - new_sqrt);
+            total_output += delta_b.max(0.0);
+            remaining -= consumed;
+            current_sqrt_price = new_sqrt;
+            final_tick = ((new_sqrt * new_sqrt).ln() / 1.0001_f64.ln()) as i32;
+        } else {
+            // Buying token A with token B: price moves up.
+            let sqrt_upper = TickRange::sqrt_price_at_tick(range.tick_upper);
+            let effective_sqrt = current_sqrt_price.min(sqrt_upper);
+
+            // Maximum amount of B that can be swapped in this range.
+            // delta_b = L * (sqrt_upper - sqrt_current)
+            let max_b = if sqrt_upper > effective_sqrt {
+                liquidity * (sqrt_upper - effective_sqrt)
+            } else {
+                0.0
+            };
+
+            let consumed = remaining.min(max_b);
+            if consumed <= 0.0 {
+                continue;
+            }
+
+            // New sqrt price.
+            let new_sqrt = effective_sqrt + consumed / liquidity;
+
+            // Output of token A: delta_a = L * (1/sqrt_current - 1/sqrt_new)
+            let delta_a = liquidity * (1.0 / effective_sqrt - 1.0 / new_sqrt);
+            total_output += delta_a.max(0.0);
+            remaining -= consumed;
+            current_sqrt_price = new_sqrt;
+            let price = current_sqrt_price * current_sqrt_price;
+            final_tick = (price.ln() / 1.0001_f64.ln()) as i32;
+        }
+    }
+
+    (total_output as u64, final_tick)
+}
+
+// ---------------------------------------------------------------------------
+// Pool graph
+// ---------------------------------------------------------------------------
+
+/// Edge in the pool graph connecting two token mints via a pool.
+#[derive(Debug, Clone)]
+pub struct PoolEdge {
+    pub pool_address: Pubkey,
+    pub token_in: Pubkey,
+    pub token_out: Pubkey,
+    pub reserve_in: u64,
+    pub reserve_out: u64,
+    pub fee_bps: u16,
+    pub pool_type: PoolType,
+}
+
+/// Graph representation where nodes are token mints and edges are pools.
+///
+/// Enables Dijkstra's shortest path to find optimal swap routes.
+#[derive(Debug, Clone, Default)]
+pub struct PoolGraph {
+    /// Adjacency list: token_mint -> list of pool edges.
+    pub adjacency: HashMap<Pubkey, Vec<PoolEdge>>,
+    /// Set of all known token mints.
+    pub tokens: HashSet<Pubkey>,
+}
+
+impl PoolGraph {
+    pub fn new() -> Self {
+        Self {
+            adjacency: HashMap::new(),
+            tokens: HashSet::new(),
+        }
+    }
+
+    /// Add a pool to the graph, creating edges in both directions.
+    pub fn add_pool(&mut self, pool: &PoolInfo) {
+        self.tokens.insert(pool.token_a);
+        self.tokens.insert(pool.token_b);
+
+        // A -> B edge.
+        self.adjacency
+            .entry(pool.token_a)
+            .or_default()
+            .push(PoolEdge {
+                pool_address: pool.address,
+                token_in: pool.token_a,
+                token_out: pool.token_b,
+                reserve_in: pool.reserve_a,
+                reserve_out: pool.reserve_b,
+                fee_bps: pool.fee_bps,
+                pool_type: pool.pool_type,
+            });
+
+        // B -> A edge.
+        self.adjacency
+            .entry(pool.token_b)
+            .or_default()
+            .push(PoolEdge {
+                pool_address: pool.address,
+                token_in: pool.token_b,
+                token_out: pool.token_a,
+                reserve_in: pool.reserve_b,
+                reserve_out: pool.reserve_a,
+                fee_bps: pool.fee_bps,
+                pool_type: pool.pool_type,
+            });
+    }
+
+    /// Returns all tokens reachable from the given mint.
+    pub fn reachable_tokens(&self, from: &Pubkey) -> HashSet<Pubkey> {
+        let mut visited = HashSet::new();
+        let mut stack = vec![*from];
+
+        while let Some(current) = stack.pop() {
+            if !visited.insert(current) {
+                continue;
+            }
+            if let Some(edges) = self.adjacency.get(&current) {
+                for edge in edges {
+                    if !visited.contains(&edge.token_out) {
+                        stack.push(edge.token_out);
+                    }
+                }
+            }
+        }
+
+        visited.remove(from);
+        visited
+    }
+
+    /// Returns the number of unique tokens.
+    pub fn token_count(&self) -> usize {
+        self.tokens.len()
+    }
+
+    /// Returns the total number of directed edges (each pool contributes 2).
+    pub fn edge_count(&self) -> usize {
+        self.adjacency.values().map(|v| v.len()).sum()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pool registry
+// ---------------------------------------------------------------------------
+
+/// Thread-safe registry of known liquidity pools.
+pub struct PoolRegistry {
+    /// Pools keyed by their on-chain address.
+    pools: DashMap<Pubkey, PoolInfo>,
+    /// Index: (token_a, token_b) -> list of pool addresses.
+    pair_index: DashMap<(Pubkey, Pubkey), Vec<Pubkey>>,
+    /// Index: token -> list of pool addresses that include this token.
+    token_index: DashMap<Pubkey, Vec<Pubkey>>,
+}
+
+impl PoolRegistry {
+    pub fn new() -> Self {
+        Self {
+            pools: DashMap::new(),
+            pair_index: DashMap::new(),
+            token_index: DashMap::new(),
+        }
+    }
+
+    /// Register a pool in the registry.
+    pub fn register(&self, pool: PoolInfo) {
+        let addr = pool.address;
+        let pair = pool.token_pair();
+
+        self.pair_index.entry(pair).or_default().push(addr);
+        self.token_index.entry(pool.token_a).or_default().push(addr);
+        self.token_index.entry(pool.token_b).or_default().push(addr);
+
+        debug!("Registered pool {} for pair {:?}", addr, pair);
+        self.pools.insert(addr, pool);
+    }
+
+    /// Retrieve a pool by address.
+    pub fn get(&self, address: &Pubkey) -> Option<PoolInfo> {
+        self.pools.get(address).map(|r| r.value().clone())
+    }
+
+    /// Find all pools for a given token pair (order-independent).
+    pub fn pools_for_pair(&self, token_a: &Pubkey, token_b: &Pubkey) -> Vec<PoolInfo> {
+        let pair = if *token_a < *token_b {
+            (*token_a, *token_b)
+        } else {
+            (*token_b, *token_a)
+        };
+
+        self.pair_index
+            .get(&pair)
+            .map(|addrs| {
+                addrs
+                    .iter()
+                    .filter_map(|addr| self.pools.get(addr).map(|r| r.value().clone()))
+                    .filter(|p| p.is_active)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Find all pools that include a given token.
+    pub fn pools_for_token(&self, token: &Pubkey) -> Vec<PoolInfo> {
+        self.token_index
+            .get(token)
+            .map(|addrs| {
+                addrs
+                    .iter()
+                    .filter_map(|addr| self.pools.get(addr).map(|r| r.value().clone()))
+                    .filter(|p| p.is_active)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Build a PoolGraph from all registered pools.
+    pub fn build_graph(&self) -> PoolGraph {
+        let mut graph = PoolGraph::new();
+        for entry in self.pools.iter() {
+            let pool = entry.value();
+            if pool.is_active {
+                graph.add_pool(pool);
+            }
+        }
+        info!(
+            "Built pool graph: {} tokens, {} edges",
+            graph.token_count(),
+            graph.edge_count()
+        );
+        graph
+    }
+
+    /// Total number of registered pools.
+    pub fn pool_count(&self) -> usize {
+        self.pools.len()
+    }
