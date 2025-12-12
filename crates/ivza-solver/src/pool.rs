@@ -246,4 +246,254 @@ impl PoolInfo {
     pub fn spot_price_a_to_b(&self) -> f64 {
         if self.reserve_a == 0 {
             return 0.0;
-        }
+        }
+        self.reserve_b as f64 / self.reserve_a as f64
+    }
+
+    /// Spot price of token_b denominated in token_a.
+    pub fn spot_price_b_to_a(&self) -> f64 {
+        if self.reserve_b == 0 {
+            return 0.0;
+        }
+        self.reserve_a as f64 / self.reserve_b as f64
+    }
+
+    /// The constant product k = reserve_a * reserve_b.
+    pub fn invariant_k(&self) -> u128 {
+        self.reserve_a as u128 * self.reserve_b as u128
+    }
+
+    /// Total value locked (in token B units), approximated as 2 * reserve_b.
+    pub fn tvl_in_token_b(&self) -> u64 {
+        self.reserve_b.saturating_mul(2)
+    }
+}
+
+impl fmt::Display for PoolInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Pool({}, {}, A={}, B={}, fee={}bps)",
+            &self.address.to_string()[..8],
+            self.pool_type,
+            self.reserve_a,
+            self.reserve_b,
+            self.fee_bps,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Constant-product AMM math
+// ---------------------------------------------------------------------------
+
+/// Calculate the output amount for a constant-product swap.
+///
+/// Given input amount `amount_in` of token X with reserves (reserve_in, reserve_out)
+/// and a fee in basis points, computes the output of token Y.
+///
+/// Formula: out = (reserve_out * amount_in_after_fee) / (reserve_in + amount_in_after_fee)
+pub fn calculate_output(reserve_in: u64, reserve_out: u64, amount_in: u64, fee_bps: u16) -> u64 {
+    if reserve_in == 0 || reserve_out == 0 || amount_in == 0 {
+        return 0;
+    }
+
+    let fee_factor = 10_000u128 - fee_bps as u128;
+    let amount_in_after_fee = amount_in as u128 * fee_factor;
+    let numerator = reserve_out as u128 * amount_in_after_fee;
+    let denominator = reserve_in as u128 * 10_000u128 + amount_in_after_fee;
+
+    if denominator == 0 {
+        return 0;
+    }
+
+    (numerator / denominator) as u64
+}
+
+/// Calculate the input amount required to receive exactly `amount_out` tokens.
+///
+/// Inverse of `calculate_output`.
+pub fn calculate_input_for_output(
+    reserve_in: u64,
+    reserve_out: u64,
+    amount_out: u64,
+    fee_bps: u16,
+) -> u64 {
+    if reserve_in == 0 || reserve_out == 0 || amount_out == 0 || amount_out >= reserve_out {
+        return u64::MAX;
+    }
+
+    let fee_factor = 10_000u128 - fee_bps as u128;
+    let numerator = reserve_in as u128 * amount_out as u128 * 10_000u128;
+    let denominator = (reserve_out as u128 - amount_out as u128) * fee_factor;
+
+    if denominator == 0 {
+        return u64::MAX;
+    }
+
+    // Ceiling division to ensure we provide enough input.
+    ((numerator + denominator - 1) / denominator) as u64
+}
+
+/// Calculate price impact as a fraction (0.0 to 1.0).
+///
+/// Price impact = 1 - (effective_price / spot_price).
+pub fn calculate_price_impact(
+    reserve_in: u64,
+    reserve_out: u64,
+    amount_in: u64,
+    fee_bps: u16,
+) -> f64 {
+    if reserve_in == 0 || reserve_out == 0 || amount_in == 0 {
+        return 0.0;
+    }
+
+    let spot_price = reserve_out as f64 / reserve_in as f64;
+    let output = calculate_output(reserve_in, reserve_out, amount_in, fee_bps);
+
+    if output == 0 {
+        return 1.0;
+    }
+
+    let effective_price = output as f64 / amount_in as f64;
+    let impact = 1.0 - (effective_price / spot_price);
+    impact.max(0.0).min(1.0)
+}
+
+/// Find the optimal split of `total_amount` across `n` identical pools to minimize
+/// aggregate price impact. Returns the per-pool amount.
+///
+/// For identical constant-product pools, splitting equally is optimal. For different
+/// pools, this uses a gradient-descent-like iterative approach.
+pub fn calculate_optimal_split(
+    pools: &[(u64, u64, u16)], // (reserve_in, reserve_out, fee_bps) per pool
+    total_amount: u64,
+) -> Vec<u64> {
+    let n = pools.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![total_amount];
+    }
+
+    // Start with equal split.
+    let mut allocations: Vec<f64> = vec![total_amount as f64 / n as f64; n];
+    let total = total_amount as f64;
+
+    // Iterative refinement: move allocation towards pools with better marginal output.
+    for _iteration in 0..50 {
+        let mut marginal_outputs = Vec::with_capacity(n);
+        for (i, &(res_in, res_out, fee)) in pools.iter().enumerate() {
+            let alloc = allocations[i] as u64;
+            let out_base = calculate_output(res_in, res_out, alloc, fee);
+            let out_plus = calculate_output(res_in, res_out, alloc.saturating_add(1), fee);
+            let marginal = out_plus as f64 - out_base as f64;
+            marginal_outputs.push(marginal);
+        }
+
+        let avg_marginal: f64 = marginal_outputs.iter().sum::<f64>() / n as f64;
+        if avg_marginal <= 0.0 {
+            break;
+        }
+
+        let mut max_change: f64 = 0.0;
+        let _step = total * 0.01;
+
+        for i in 0..n {
+            let ratio = if avg_marginal > 0.0 {
+                marginal_outputs[i] / avg_marginal
+            } else {
+                1.0
+            };
+            let new_alloc = (allocations[i] * ratio).max(0.0);
+            let change = (new_alloc - allocations[i]).abs();
+            if change > max_change {
+                max_change = change;
+            }
+            allocations[i] = new_alloc;
+        }
+
+        // Re-normalize to total.
+        let current_sum: f64 = allocations.iter().sum();
+        if current_sum > 0.0 {
+            for a in &mut allocations {
+                *a = *a * total / current_sum;
+            }
+        }
+
+        if max_change < 1.0 {
+            break;
+        }
+    }
+
+    // Convert to integers and fix rounding.
+    let mut result: Vec<u64> = allocations.iter().map(|a| *a as u64).collect();
+    let assigned: u64 = result.iter().sum();
+    let remainder = total_amount.saturating_sub(assigned);
+    if !result.is_empty() {
+        result[0] = result[0].saturating_add(remainder);
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// CLMM math
+// ---------------------------------------------------------------------------
+
+/// Calculate output for a CLMM swap across multiple tick ranges.
+///
+/// Processes the swap by consuming liquidity from each tick range in sequence,
+/// moving the price as liquidity is consumed.
+pub fn calculate_clmm_output(
+    tick_ranges: &[TickRange],
+    current_tick: i32,
+    amount_in: u64,
+    a_to_b: bool,
+    fee_bps: u16,
+) -> (u64, i32) {
+    let fee_factor = (10_000.0 - fee_bps as f64) / 10_000.0;
+    let mut remaining = amount_in as f64 * fee_factor;
+    let mut total_output: f64 = 0.0;
+    let mut current_sqrt_price = TickRange::sqrt_price_at_tick(current_tick);
+    let mut final_tick = current_tick;
+
+    // Sort ranges by tick: ascending for a->b (price decreasing), descending for b->a.
+    let mut sorted_ranges: Vec<&TickRange> = tick_ranges
+        .iter()
+        .filter(|r| {
+            if a_to_b {
+                r.tick_lower <= current_tick
+            } else {
+                r.tick_upper > current_tick
+            }
+        })
+        .collect();
+
+    if a_to_b {
+        sorted_ranges.sort_by(|a, b| b.tick_lower.cmp(&a.tick_lower));
+    } else {
+        sorted_ranges.sort_by(|a, b| a.tick_lower.cmp(&b.tick_lower));
+    }
+
+    for range in &sorted_ranges {
+        if remaining <= 0.0 {
+            break;
+        }
+
+        let liquidity = range.liquidity as f64;
+        if liquidity <= 0.0 {
+            continue;
+        }
+
+        if a_to_b {
+            // Selling token A for token B: price moves down.
+            let sqrt_lower = TickRange::sqrt_price_at_tick(range.tick_lower);
+            let effective_sqrt = current_sqrt_price.max(sqrt_lower);
+
+            // Maximum amount of A that can be swapped in this range.
+            // delta_a = L * (1/sqrt_lower - 1/sqrt_current)
+            let max_a = if effective_sqrt > sqrt_lower {
+                liquidity * (1.0 / sqrt_lower - 1.0 / effective_sqrt)
+            } else {
+                0.0
