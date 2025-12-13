@@ -240,4 +240,126 @@ impl ExecutionOptimizer {
                 out_b.cmp(&out_a)
             });
 
-            if sorted_ids != node_ids && !node_ids.is_empty() {
+            if sorted_ids != node_ids && !node_ids.is_empty() {
+                actions.push(OptimizationAction::ReorderLane {
+                    lane_index: 0,
+                    original_order: node_ids,
+                    new_order: sorted_ids,
+                });
+            }
+        }
+
+        // Phase 3: Compute optimized totals.
+        let optimized_output: u64 = optimized_swaps
+            .values()
+            .map(|s| s.route.output_amount)
+            .sum();
+        let optimized_input: u64 = optimized_swaps.values().map(|s| s.request.amount).sum();
+
+        // Cost = input - output (the "loss" from fees and impact).
+        let original_cost = solver_result
+            .total_input
+            .saturating_sub(solver_result.total_output);
+        let optimized_cost = optimized_input.saturating_sub(optimized_output);
+
+        let savings_bps = if original_cost > 0 {
+            ((original_cost.saturating_sub(optimized_cost) as f64 / original_cost as f64)
+                * 10_000.0) as u16
+        } else {
+            0
+        };
+
+        let total_hops: usize = optimized_swaps.values().map(|s| s.route.hop_count()).sum();
+        let estimated_cost = 5_000u64 * optimized_swaps.len() as u64 + 200 * total_hops as u64;
+
+        let optimized_result = SolverResult {
+            solved_swaps: optimized_swaps,
+            total_input: optimized_input,
+            total_output: optimized_output,
+            estimated_cost_lamports: estimated_cost,
+            failed_count: solver_result.failed_count,
+            solve_time_ms: solver_result.solve_time_ms,
+        };
+
+        info!(
+            "Optimizer: original_out={}, optimized_out={}, savings={}bps, {} actions",
+            original_output,
+            optimized_output,
+            savings_bps,
+            actions.len(),
+        );
+
+        Ok(OptimizationResult {
+            original_cost,
+            optimized_cost,
+            savings_bps,
+            original_output,
+            optimized_output,
+            actions,
+            optimized_result,
+        })
+    }
+
+    /// Try to split a swap across multiple routes to reduce price impact.
+    fn try_split_swap(
+        &self,
+        solved: &SolvedSwap,
+        engine: &RouteEngine,
+    ) -> Result<Option<(Vec<SolvedSwap>, OptimizationAction)>> {
+        let request = &solved.request;
+        let original_output = solved.route.output_amount;
+
+        // Find the pools used by the current route.
+        let pool_data: Vec<(u64, u64, u16)> = solved
+            .route
+            .hops
+            .iter()
+            .filter_map(|hop| {
+                engine.registry.get(&hop.pool_address).map(|pool| {
+                    let (res_in, res_out) = if hop.input_mint == pool.token_a {
+                        (pool.reserve_a, pool.reserve_b)
+                    } else {
+                        (pool.reserve_b, pool.reserve_a)
+                    };
+                    (res_in, res_out, pool.fee_bps)
+                })
+            })
+            .collect();
+
+        if pool_data.is_empty() {
+            return Ok(None);
+        }
+
+        // For multi-hop routes, splitting is more complex.  We only split
+        // single-hop routes or use the first hop's pool data as proxy.
+        let primary_pool = pool_data[0];
+
+        // Try splitting across 2..=max_splits identical pools.
+        let mut best_total_output = original_output;
+        let mut best_split_count = 1usize;
+
+        for n in 2..=self.config.max_splits {
+            let per_split = request.amount / n as u64;
+            if per_split < self.config.min_split_amount {
+                break;
+            }
+
+            // Simulate splitting into n equal parts through the same pool.
+            let mut total_out = 0u64;
+            for _ in 0..n {
+                let out =
+                    calculate_output(primary_pool.0, primary_pool.1, per_split, primary_pool.2);
+                total_out = total_out.saturating_add(out);
+            }
+            // Handle remainder.
+            let remainder = request.amount - per_split * n as u64;
+            if remainder > 0 {
+                let out =
+                    calculate_output(primary_pool.0, primary_pool.1, remainder, primary_pool.2);
+                total_out = total_out.saturating_add(out);
+            }
+
+            if total_out > best_total_output {
+                best_total_output = total_out;
+                best_split_count = n;
+            }
