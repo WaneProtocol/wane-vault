@@ -118,4 +118,126 @@ impl fmt::Display for OptimizationAction {
             }
         }
     }
-}
+}
+
+/// Result of optimization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptimizationResult {
+    /// Original total estimated cost (output lost to price impact, in input token units).
+    pub original_cost: u64,
+    /// Optimized total estimated cost.
+    pub optimized_cost: u64,
+    /// Savings in basis points.
+    pub savings_bps: u16,
+    /// Original total output.
+    pub original_output: u64,
+    /// Optimized total output.
+    pub optimized_output: u64,
+    /// Actions taken.
+    pub actions: Vec<OptimizationAction>,
+    /// Optimized solver result (with split/merged routes).
+    pub optimized_result: SolverResult,
+}
+
+impl OptimizationResult {
+    /// Returns the absolute output improvement.
+    pub fn output_improvement(&self) -> u64 {
+        self.optimized_output.saturating_sub(self.original_output)
+    }
+
+    /// Returns the improvement as a percentage.
+    pub fn improvement_pct(&self) -> f64 {
+        if self.original_output == 0 {
+            return 0.0;
+        }
+        (self.optimized_output as f64 / self.original_output as f64 - 1.0) * 100.0
+    }
+}
+
+impl fmt::Display for OptimizationResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "OptimizationResult(original_out={}, optimized_out={}, improvement={:.2}%, {} actions)",
+            self.original_output,
+            self.optimized_output,
+            self.improvement_pct(),
+            self.actions.len(),
+        )
+    }
+}
+
+/// The main execution optimizer.
+pub struct ExecutionOptimizer {
+    pub config: OptimizerConfig,
+}
+
+impl ExecutionOptimizer {
+    pub fn new() -> Self {
+        Self {
+            config: OptimizerConfig::default(),
+        }
+    }
+
+    pub fn with_config(mut self, config: OptimizerConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Optimize a solver result: split large swaps, merge transactions, reorder lanes.
+    pub fn optimize(
+        &self,
+        solver_result: &SolverResult,
+        engine: &RouteEngine,
+    ) -> Result<OptimizationResult> {
+        let mut actions = Vec::new();
+        let mut optimized_swaps = solver_result.solved_swaps.clone();
+        let original_output = solver_result.total_output;
+
+        // Phase 1: Split large swaps with high price impact.
+        for (node_id, solved) in &solver_result.solved_swaps {
+            if solved.route.total_price_impact >= self.config.split_threshold {
+                match self.try_split_swap(solved, engine) {
+                    Ok(Some((split_swaps, action))) => {
+                        // Replace the single swap with the best split.
+                        // The split_swaps are individual SolvedSwaps; we keep the one
+                        // with the highest aggregate output.
+                        let total_split_output: u64 =
+                            split_swaps.iter().map(|s| s.route.output_amount).sum();
+
+                        if total_split_output > solved.route.output_amount {
+                            // Build a combined route that represents the split.
+                            let combined = self.combine_split_routes(&split_swaps, solved);
+                            optimized_swaps.insert(*node_id, combined);
+                            actions.push(action);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        debug!("Split optimization failed for node {}: {}", node_id, e);
+                    }
+                }
+            }
+        }
+
+        // Phase 2: Reorder within lanes (highest output first for priority fee optimization).
+        if self.config.enable_reordering {
+            // Group swaps by notional lane assignment (we use node_id ordering as proxy).
+            let mut node_ids: Vec<NodeId> = optimized_swaps.keys().copied().collect();
+            node_ids.sort();
+
+            // Reorder by descending output amount (higher-value swaps first).
+            let mut sorted_ids = node_ids.clone();
+            sorted_ids.sort_by(|a, b| {
+                let out_a = optimized_swaps
+                    .get(a)
+                    .map(|s| s.route.output_amount)
+                    .unwrap_or(0);
+                let out_b = optimized_swaps
+                    .get(b)
+                    .map(|s| s.route.output_amount)
+                    .unwrap_or(0);
+                out_b.cmp(&out_a)
+            });
+
+            if sorted_ids != node_ids && !node_ids.is_empty() {
