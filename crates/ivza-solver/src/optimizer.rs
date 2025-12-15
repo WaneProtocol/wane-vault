@@ -362,4 +362,126 @@ impl ExecutionOptimizer {
             if total_out > best_total_output {
                 best_total_output = total_out;
                 best_split_count = n;
-            }
+            }
+        }
+
+        if best_split_count <= 1 {
+            return Ok(None);
+        }
+
+        // Build split amounts.
+        let per_split = request.amount / best_split_count as u64;
+        let remainder = request.amount - per_split * best_split_count as u64;
+        let mut split_amounts = vec![per_split; best_split_count];
+        if remainder > 0 {
+            split_amounts[0] += remainder;
+        }
+
+        // Build individual SolvedSwaps for each split.
+        let mut split_swaps = Vec::new();
+        for (i, &amount) in split_amounts.iter().enumerate() {
+            // Re-route each split.
+            match engine.find_best_route(&request.input_mint, &request.output_mint, amount) {
+                Ok(route) => {
+                    let slippage_factor = 0.99; // 1% slippage for splits
+                    let min_output = (route.output_amount as f64 * slippage_factor) as u64;
+
+                    split_swaps.push(SolvedSwap {
+                        request: SwapRequest {
+                            node_id: request.node_id * 1000 + i as u64,
+                            input_mint: request.input_mint,
+                            output_mint: request.output_mint,
+                            amount,
+                            label: request.label.as_ref().map(|l| format!("{}_split_{}", l, i)),
+                        },
+                        route,
+                        min_output,
+                    });
+                }
+                Err(_) => {
+                    return Ok(None);
+                }
+            }
+        }
+
+        let action = OptimizationAction::SplitSwap {
+            node_id: request.node_id,
+            original_amount: request.amount,
+            split_amounts: split_amounts.clone(),
+            original_output,
+            optimized_output: best_total_output,
+        };
+
+        Ok(Some((split_swaps, action)))
+    }
+
+    /// Combine multiple split routes into a single SolvedSwap with aggregate metrics.
+    fn combine_split_routes(&self, splits: &[SolvedSwap], original: &SolvedSwap) -> SolvedSwap {
+        if splits.is_empty() {
+            return original.clone();
+        }
+
+        // Use the first split's route structure but update amounts.
+        let total_output: u64 = splits.iter().map(|s| s.route.output_amount).sum();
+        let total_input: u64 = splits.iter().map(|s| s.request.amount).sum();
+
+        // Build a combined route from the best split's hops.
+        let best_split = splits.iter().max_by_key(|s| s.route.output_amount).unwrap();
+
+        let mut combined_hops = best_split.route.hops.clone();
+        // Update the combined hop amounts to reflect totals.
+        if let Some(first_hop) = combined_hops.first_mut() {
+            first_hop.input_amount = total_input;
+        }
+        if let Some(last_hop) = combined_hops.last_mut() {
+            last_hop.output_amount = total_output;
+        }
+
+        let combined_route = Route::from_hops(combined_hops);
+        let min_output: u64 = splits.iter().map(|s| s.min_output).sum();
+
+        SolvedSwap {
+            request: original.request.clone(),
+            route: combined_route,
+            min_output,
+        }
+    }
+
+    /// Optimize an execution plan by merging compatible transactions in the same lane.
+    pub fn optimize_plan(&self, plan: &ExecutionPlan) -> Result<ExecutionPlan> {
+        if !self.config.enable_merging {
+            return Ok(plan.clone());
+        }
+
+        let mut optimized = ExecutionPlan::new();
+        let mut actions = Vec::new();
+
+        for lane in &plan.lanes {
+            if lane.node_ids.len() <= 1 {
+                optimized.lanes.push(lane.clone());
+                continue;
+            }
+
+            // Try to merge consecutive transactions in the lane that together
+            // fit within the CU limit.
+            let mut merged_lane = ExecutionLane::new(lane.index);
+            let mut merged_nodes: Vec<NodeId> = Vec::new();
+            let mut current_cu = 0u64;
+
+            for &node_id in &lane.node_ids {
+                // Estimate CU for this node (use a default since we don't have
+                // the graph here; the caller should provide CU estimates).
+                let node_cu = 200_000u64;
+
+                if current_cu + node_cu > self.config.max_merged_cu && !merged_nodes.is_empty() {
+                    // Start a new merge group.
+                    merged_nodes.clear();
+                    current_cu = 0;
+                }
+
+                merged_nodes.push(node_id);
+                merged_lane.node_ids.push(node_id);
+                current_cu += node_cu;
+            }
+
+            // Record CU saved by merging (overhead reduction).
