@@ -484,4 +484,125 @@ impl ExecutionOptimizer {
                 current_cu += node_cu;
             }
 
-            // Record CU saved by merging (overhead reduction).
+            // Record CU saved by merging (overhead reduction).
+            let overhead_per_tx = 5_000u64; // Base transaction overhead
+            let original_overhead = lane.node_ids.len() as u64 * overhead_per_tx;
+            let merged_overhead = overhead_per_tx; // Single transaction
+            let cu_saved = original_overhead.saturating_sub(merged_overhead);
+
+            if cu_saved > 0 && lane.node_ids.len() > 1 {
+                actions.push(OptimizationAction::MergeTransactions {
+                    lane_index: lane.index,
+                    node_ids: lane.node_ids.clone(),
+                    cu_saved,
+                });
+            }
+
+            merged_lane.total_cu = lane.total_cu;
+            optimized.lanes.push(merged_lane);
+        }
+
+        // Rebuild assignments.
+        for lane in &optimized.lanes {
+            for (pos, &node_id) in lane.node_ids.iter().enumerate() {
+                optimized.assignments.push(LaneAssignment {
+                    node_id,
+                    lane_index: lane.index,
+                    position_in_lane: pos,
+                });
+            }
+        }
+
+        optimized.finalize();
+
+        info!(
+            "PlanOptimizer: {} lanes, {} merge actions",
+            optimized.num_lanes(),
+            actions.len(),
+        );
+
+        Ok(optimized)
+    }
+}
+
+impl Default for ExecutionOptimizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pool::{PoolInfo, PoolRegistry};
+    use crate::router::RouteEngine;
+    use crate::solver::{GreedySolver, Solver, SolverConfig, SwapRequest};
+
+    fn make_pubkey(seed: u8) -> Pubkey {
+        Pubkey::new_from_array([seed; 32])
+    }
+
+    fn setup() -> (RouteEngine, SolverResult) {
+        let registry = PoolRegistry::new();
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+
+        // Pool with modest liquidity so large swaps have price impact.
+        registry.register(PoolInfo::constant_product(
+            make_pubkey(10),
+            sol,
+            usdc,
+            10_000_000,
+            1_500_000_000,
+            30,
+        ));
+
+        let engine = RouteEngine::new(registry);
+        let config = SolverConfig::default();
+        let solver = GreedySolver::new();
+
+        // Large swap relative to pool size to trigger price impact.
+        let requests = vec![SwapRequest {
+            node_id: 0,
+            input_mint: sol,
+            output_mint: usdc,
+            amount: 1_000_000, // 10% of pool reserve
+            label: Some("big_swap".into()),
+        }];
+
+        let result = solver.solve(&requests, &engine, &config).unwrap();
+        (engine, result)
+    }
+
+    #[test]
+    fn test_optimizer_basic() {
+        let (engine, result) = setup();
+        let optimizer = ExecutionOptimizer::new();
+        let opt_result = optimizer.optimize(&result, &engine).unwrap();
+
+        assert!(opt_result.optimized_output >= opt_result.original_output);
+    }
+
+    #[test]
+    fn test_optimizer_config() {
+        let config = OptimizerConfig::default();
+        assert_eq!(config.max_splits, 5);
+        assert!(config.enable_reordering);
+        assert!(config.enable_merging);
+    }
+
+    #[test]
+    fn test_plan_optimization() {
+        let optimizer = ExecutionOptimizer::new();
+        let mut plan = ExecutionPlan::new();
+
+        let mut lane = ExecutionLane::new(0);
+        lane.node_ids = vec![0, 1, 2];
+        lane.total_cu = 600_000;
+        plan.lanes.push(lane);
+        plan.finalize();
+
+        let optimized = optimizer.optimize_plan(&plan).unwrap();
+        assert!(!optimized.lanes.is_empty());
+    }
+}
