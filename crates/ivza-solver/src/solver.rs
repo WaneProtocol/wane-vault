@@ -176,4 +176,183 @@ impl Solver for GreedySolver {
         let mut total_output = 0u64;
         let mut failed_count = 0usize;
 
-        for request in requests {
+        for request in requests {
+            if Instant::now() > deadline {
+                warn!(
+                    "GreedySolver: timeout after {}ms, {} of {} solved",
+                    config.timeout_ms,
+                    solved_swaps.len(),
+                    requests.len()
+                );
+                failed_count += requests.len() - solved_swaps.len();
+                break;
+            }
+
+            match engine.find_routes(&request.input_mint, &request.output_mint, request.amount) {
+                Ok(routes) => {
+                    // Filter by config constraints.
+                    let valid_routes: Vec<Route> = routes
+                        .into_iter()
+                        .filter(|r| {
+                            if !config.allow_multi_hop && r.hop_count() > 1 {
+                                return false;
+                            }
+                            if r.hop_count() > config.max_hops {
+                                return false;
+                            }
+                            let ratio = r.exchange_rate();
+                            if ratio < config.min_output_ratio {
+                                return false;
+                            }
+                            true
+                        })
+                        .take(config.max_routes)
+                        .collect();
+
+                    if let Some(best) = valid_routes.into_iter().next() {
+                        let slippage_factor =
+                            (10_000u64 - config.slippage_bps as u64) as f64 / 10_000.0;
+                        let min_output = (best.output_amount as f64 * slippage_factor) as u64;
+
+                        total_input += request.amount;
+                        total_output += best.output_amount;
+
+                        debug!(
+                            "GreedySolver: node {} -> {} hops, out={}, min_out={}",
+                            request.node_id,
+                            best.hop_count(),
+                            best.output_amount,
+                            min_output,
+                        );
+
+                        solved_swaps.insert(
+                            request.node_id,
+                            SolvedSwap {
+                                request: request.clone(),
+                                route: best,
+                                min_output,
+                            },
+                        );
+                    } else {
+                        warn!(
+                            "GreedySolver: no valid route for node {} ({} -> {})",
+                            request.node_id, request.input_mint, request.output_mint,
+                        );
+                        failed_count += 1;
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "GreedySolver: route finding failed for node {}: {}",
+                        request.node_id, e
+                    );
+                    failed_count += 1;
+                }
+            }
+        }
+
+        let elapsed = start.elapsed().as_millis() as u64;
+
+        // Estimate cost: 5000 lamports base + 200 lamports per hop.
+        let total_hops: usize = solved_swaps.values().map(|s| s.route.hop_count()).sum();
+        let estimated_cost = 5_000u64 * solved_swaps.len() as u64 + 200 * total_hops as u64;
+
+        info!(
+            "GreedySolver: solved {}/{} swaps in {}ms",
+            solved_swaps.len(),
+            requests.len(),
+            elapsed,
+        );
+
+        Ok(SolverResult {
+            solved_swaps,
+            total_input,
+            total_output,
+            estimated_cost_lamports: estimated_cost,
+            failed_count,
+            solve_time_ms: elapsed,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BranchAndBoundSolver
+// ---------------------------------------------------------------------------
+
+/// Branch-and-bound solver: finds globally optimal route assignments by
+/// considering interactions between swaps that share pool liquidity.
+///
+/// Uses DFS with bounding to prune unpromising branches. Falls back to
+/// greedy if the search space is too large.
+pub struct BranchAndBoundSolver {
+    /// Maximum number of branch-and-bound nodes to explore.
+    pub max_nodes: usize,
+}
+
+impl BranchAndBoundSolver {
+    pub fn new() -> Self {
+        Self { max_nodes: 10_000 }
+    }
+
+    pub fn with_max_nodes(mut self, max: usize) -> Self {
+        self.max_nodes = max;
+        self
+    }
+
+    /// Detect which swap requests share pool liquidity.
+    fn find_shared_pools(
+        &self,
+        candidates: &HashMap<NodeId, Vec<Route>>,
+    ) -> HashMap<Pubkey, Vec<NodeId>> {
+        let mut pool_to_nodes: HashMap<Pubkey, Vec<NodeId>> = HashMap::new();
+
+        for (&node_id, routes) in candidates {
+            for route in routes {
+                for pool_addr in route.pool_addresses() {
+                    pool_to_nodes.entry(pool_addr).or_default().push(node_id);
+                }
+            }
+        }
+
+        // Only keep pools shared by multiple nodes.
+        pool_to_nodes.retain(|_, nodes| {
+            nodes.sort();
+            nodes.dedup();
+            nodes.len() > 1
+        });
+
+        pool_to_nodes
+    }
+
+    /// Estimate the upper bound on total output if we optimistically pick the
+    /// best remaining route for each unsolved request.
+    fn upper_bound(
+        &self,
+        solved: &HashMap<NodeId, usize>,
+        candidates: &HashMap<NodeId, Vec<Route>>,
+        remaining: &[NodeId],
+    ) -> u64 {
+        let mut bound: u64 = 0;
+
+        // Sum the output already committed.
+        for (&node_id, &route_idx) in solved {
+            if let Some(routes) = candidates.get(&node_id) {
+                if route_idx < routes.len() {
+                    bound = bound.saturating_add(routes[route_idx].output_amount);
+                }
+            }
+        }
+
+        // For each remaining node, use the best (first) route as optimistic bound.
+        for node_id in remaining {
+            if let Some(routes) = candidates.get(node_id) {
+                if let Some(best) = routes.first() {
+                    bound = bound.saturating_add(best.output_amount);
+                }
+            }
+        }
+
+        bound
+    }
+
+    /// Recursive DFS branch-and-bound.
