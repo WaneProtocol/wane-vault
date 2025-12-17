@@ -355,4 +355,183 @@ impl BranchAndBoundSolver {
         bound
     }
 
-    /// Recursive DFS branch-and-bound.
+    /// Recursive DFS branch-and-bound.
+    fn search(
+        &self,
+        node_order: &[NodeId],
+        depth: usize,
+        current: &mut HashMap<NodeId, usize>,
+        current_output: u64,
+        best_output: &mut u64,
+        best_assignment: &mut HashMap<NodeId, usize>,
+        candidates: &HashMap<NodeId, Vec<Route>>,
+        nodes_explored: &mut usize,
+        deadline: Instant,
+    ) {
+        if *nodes_explored >= self.max_nodes || Instant::now() > deadline {
+            return;
+        }
+
+        // All nodes assigned.
+        if depth >= node_order.len() {
+            if current_output > *best_output {
+                *best_output = current_output;
+                *best_assignment = current.clone();
+            }
+            return;
+        }
+
+        let node_id = node_order[depth];
+        let routes = match candidates.get(&node_id) {
+            Some(r) => r,
+            None => return,
+        };
+
+        for (route_idx, route) in routes.iter().enumerate() {
+            *nodes_explored += 1;
+
+            let new_output = current_output.saturating_add(route.output_amount);
+
+            // Compute upper bound: current committed + best possible for remaining.
+            current.insert(node_id, route_idx);
+            let remaining = &node_order[depth + 1..];
+            let ub = self.upper_bound(current, candidates, remaining);
+
+            if ub <= *best_output {
+                // Prune: even the optimistic bound can't beat the current best.
+                current.remove(&node_id);
+                continue;
+            }
+
+            self.search(
+                node_order,
+                depth + 1,
+                current,
+                new_output,
+                best_output,
+                best_assignment,
+                candidates,
+                nodes_explored,
+                deadline,
+            );
+
+            current.remove(&node_id);
+
+            if *nodes_explored >= self.max_nodes || Instant::now() > deadline {
+                return;
+            }
+        }
+    }
+}
+
+impl Default for BranchAndBoundSolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Solver for BranchAndBoundSolver {
+    fn name(&self) -> &str {
+        "BranchAndBoundSolver"
+    }
+
+    fn solve(
+        &self,
+        requests: &[SwapRequest],
+        engine: &RouteEngine,
+        config: &SolverConfig,
+    ) -> Result<SolverResult> {
+        let start = Instant::now();
+        let deadline = start + std::time::Duration::from_millis(config.timeout_ms);
+
+        // Phase 1: Collect candidate routes for each request.
+        let mut candidates: HashMap<NodeId, Vec<Route>> = HashMap::new();
+        let mut failed_count = 0usize;
+
+        for request in requests {
+            match engine.find_routes(&request.input_mint, &request.output_mint, request.amount) {
+                Ok(routes) => {
+                    let valid: Vec<Route> = routes
+                        .into_iter()
+                        .filter(|r| {
+                            if !config.allow_multi_hop && r.hop_count() > 1 {
+                                return false;
+                            }
+                            if r.hop_count() > config.max_hops {
+                                return false;
+                            }
+                            r.exchange_rate() >= config.min_output_ratio
+                        })
+                        .take(config.max_routes)
+                        .collect();
+
+                    if valid.is_empty() {
+                        warn!(
+                            "BranchAndBound: no valid routes for node {}",
+                            request.node_id
+                        );
+                        failed_count += 1;
+                    } else {
+                        candidates.insert(request.node_id, valid);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "BranchAndBound: route finding failed for node {}: {}",
+                        request.node_id, e
+                    );
+                    failed_count += 1;
+                }
+            }
+        }
+
+        if candidates.is_empty() {
+            return Ok(SolverResult {
+                solved_swaps: HashMap::new(),
+                total_input: 0,
+                total_output: 0,
+                estimated_cost_lamports: 0,
+                failed_count,
+                solve_time_ms: start.elapsed().as_millis() as u64,
+            });
+        }
+
+        // Phase 2: Determine search order. Nodes with fewer candidate routes first
+        // (fail-first heuristic to prune earlier).
+        let mut node_order: Vec<NodeId> = candidates.keys().copied().collect();
+        node_order.sort_by_key(|id| candidates.get(id).map(|r| r.len()).unwrap_or(0));
+
+        // Phase 3: Branch-and-bound search.
+        let mut best_output = 0u64;
+        let mut best_assignment: HashMap<NodeId, usize> = HashMap::new();
+        let mut current: HashMap<NodeId, usize> = HashMap::new();
+        let mut nodes_explored = 0usize;
+
+        // Initialize with greedy solution (first route for each).
+        for &node_id in &node_order {
+            best_assignment.insert(node_id, 0);
+            if let Some(routes) = candidates.get(&node_id) {
+                if let Some(route) = routes.first() {
+                    best_output = best_output.saturating_add(route.output_amount);
+                }
+            }
+        }
+
+        debug!(
+            "BranchAndBound: greedy baseline output={}, searching {} nodes x {} routes",
+            best_output,
+            node_order.len(),
+            candidates.values().map(|r| r.len()).sum::<usize>(),
+        );
+
+        // Only run full B&B if the search space is manageable.
+        let search_space: usize = candidates.values().map(|r| r.len()).product();
+        if search_space <= self.max_nodes * 10 {
+            self.search(
+                &node_order,
+                0,
+                &mut current,
+                0,
+                &mut best_output,
+                &mut best_assignment,
+                &candidates,
