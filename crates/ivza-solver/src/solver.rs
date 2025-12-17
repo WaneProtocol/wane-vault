@@ -534,4 +534,183 @@ impl Solver for BranchAndBoundSolver {
                 0,
                 &mut best_output,
                 &mut best_assignment,
-                &candidates,
+                &candidates,
+                &mut nodes_explored,
+                deadline,
+            );
+        }
+
+        debug!(
+            "BranchAndBound: explored {} nodes, best output={}",
+            nodes_explored, best_output,
+        );
+
+        // Phase 4: Build result from best assignment.
+        let mut solved_swaps = HashMap::new();
+        let mut total_input = 0u64;
+        let mut total_output = 0u64;
+
+        let request_map: HashMap<NodeId, &SwapRequest> =
+            requests.iter().map(|r| (r.node_id, r)).collect();
+
+        for (&node_id, &route_idx) in &best_assignment {
+            if let (Some(routes), Some(request)) =
+                (candidates.get(&node_id), request_map.get(&node_id))
+            {
+                if route_idx < routes.len() {
+                    let route = routes[route_idx].clone();
+                    let slippage_factor =
+                        (10_000u64 - config.slippage_bps as u64) as f64 / 10_000.0;
+                    let min_output = (route.output_amount as f64 * slippage_factor) as u64;
+
+                    total_input += request.amount;
+                    total_output += route.output_amount;
+
+                    solved_swaps.insert(
+                        node_id,
+                        SolvedSwap {
+                            request: (*request).clone(),
+                            route,
+                            min_output,
+                        },
+                    );
+                }
+            }
+        }
+
+        let elapsed = start.elapsed().as_millis() as u64;
+        let total_hops: usize = solved_swaps.values().map(|s| s.route.hop_count()).sum();
+        let estimated_cost = 5_000u64 * solved_swaps.len() as u64 + 200 * total_hops as u64;
+
+        info!(
+            "BranchAndBound: solved {}/{} swaps in {}ms ({} B&B nodes)",
+            solved_swaps.len(),
+            requests.len(),
+            elapsed,
+            nodes_explored,
+        );
+
+        Ok(SolverResult {
+            solved_swaps,
+            total_input,
+            total_output,
+            estimated_cost_lamports: estimated_cost,
+            failed_count,
+            solve_time_ms: elapsed,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pool::{PoolInfo, PoolRegistry};
+    use crate::router::RouteEngine;
+
+    fn make_pubkey(seed: u8) -> Pubkey {
+        Pubkey::new_from_array([seed; 32])
+    }
+
+    fn setup_engine() -> RouteEngine {
+        let registry = PoolRegistry::new();
+        let sol = make_pubkey(1);
+        let usdc = make_pubkey(2);
+        let usdt = make_pubkey(3);
+
+        registry.register(PoolInfo::constant_product(
+            make_pubkey(10),
+            sol,
+            usdc,
+            1_000_000_000,
+            150_000_000_000,
+            30,
+        ));
+        registry.register(PoolInfo::constant_product(
+            make_pubkey(11),
+            usdc,
+            usdt,
+            500_000_000_000,
+            500_000_000_000,
+            5,
+        ));
+
+        RouteEngine::new(registry)
+    }
+
+    #[test]
+    fn test_greedy_solver() {
+        let engine = setup_engine();
+        let config = SolverConfig::default();
+        let solver = GreedySolver::new();
+
+        let requests = vec![SwapRequest {
+            node_id: 0,
+            input_mint: make_pubkey(1),
+            output_mint: make_pubkey(2),
+            amount: 1_000_000,
+            label: Some("SOL->USDC".into()),
+        }];
+
+        let result = solver.solve(&requests, &engine, &config).unwrap();
+        assert!(result.all_solved());
+        assert!(result.total_output > 0);
+        assert_eq!(result.solved_swaps.len(), 1);
+    }
+
+    #[test]
+    fn test_branch_and_bound_solver() {
+        let engine = setup_engine();
+        let config = SolverConfig::default();
+        let solver = BranchAndBoundSolver::new();
+
+        let requests = vec![
+            SwapRequest {
+                node_id: 0,
+                input_mint: make_pubkey(1),
+                output_mint: make_pubkey(2),
+                amount: 1_000_000,
+                label: None,
+            },
+            SwapRequest {
+                node_id: 1,
+                input_mint: make_pubkey(2),
+                output_mint: make_pubkey(3),
+                amount: 100_000_000,
+                label: None,
+            },
+        ];
+
+        let result = solver.solve(&requests, &engine, &config).unwrap();
+        assert!(result.all_solved());
+        assert_eq!(result.solved_swaps.len(), 2);
+    }
+
+    #[test]
+    fn test_solver_config_defaults() {
+        let config = SolverConfig::default();
+        assert_eq!(config.max_routes, 10);
+        assert_eq!(config.timeout_ms, 5_000);
+        assert_eq!(config.slippage_bps, 100);
+        assert!(config.allow_multi_hop);
+    }
+
+    #[test]
+    fn test_solver_with_no_routes() {
+        let registry = PoolRegistry::new();
+        let engine = RouteEngine::new(registry);
+        let config = SolverConfig::default();
+        let solver = GreedySolver::new();
+
+        let requests = vec![SwapRequest {
+            node_id: 0,
+            input_mint: make_pubkey(1),
+            output_mint: make_pubkey(2),
+            amount: 1000,
+            label: None,
+        }];
+
+        let result = solver.solve(&requests, &engine, &config).unwrap();
+        assert_eq!(result.failed_count, 1);
+        assert!(!result.all_solved());
+    }
+}
