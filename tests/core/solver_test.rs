@@ -484,3 +484,124 @@ fn test_greedy_solver_multiple_swaps() {
         },
         SwapRequest {
             node_id: 1,
+            input_mint: make_pubkey(2),
+            output_mint: make_pubkey(3),
+            amount: 100_000_000,
+            label: None,
+        },
+    ];
+
+    let result = solver.solve(&requests, &engine, &config).unwrap();
+    assert!(result.all_solved());
+    assert_eq!(result.solved_swaps.len(), 2);
+}
+
+#[test]
+fn test_greedy_solver_no_routes() {
+    let registry = PoolRegistry::new();
+    let engine = RouteEngine::new(registry);
+    let config = SolverConfig::default();
+    let solver = GreedySolver::new();
+
+    let requests = vec![SwapRequest {
+        node_id: 0,
+        input_mint: make_pubkey(1),
+        output_mint: make_pubkey(2),
+        amount: 1000,
+        label: None,
+    }];
+
+    let result = solver.solve(&requests, &engine, &config).unwrap();
+    assert!(!result.all_solved());
+    assert_eq!(result.failed_count, 1);
+}
+
+// ---------------------------------------------------------------------------
+// BranchAndBoundSolver tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_branch_and_bound_solver() {
+    let registry = setup_registry();
+    let engine = RouteEngine::new(registry);
+    let config = SolverConfig::default();
+    let solver = BranchAndBoundSolver::new();
+
+    let requests = vec![
+        SwapRequest {
+            node_id: 0,
+            input_mint: make_pubkey(1),
+            output_mint: make_pubkey(2),
+            amount: 1_000_000,
+            label: None,
+        },
+        SwapRequest {
+            node_id: 1,
+            input_mint: make_pubkey(2),
+            output_mint: make_pubkey(3),
+            amount: 100_000_000,
+            label: None,
+        },
+    ];
+
+    let result = solver.solve(&requests, &engine, &config).unwrap();
+    assert!(result.all_solved());
+    assert_eq!(result.solved_swaps.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// SolverEngine integration tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_solver_engine_register_and_solve() {
+    let mut engine = SolverEngine::new();
+    engine.register_pool(PoolInfo::constant_product(
+        make_pubkey(10), make_pubkey(1), make_pubkey(2),
+        1_000_000_000, 150_000_000_000, 30,
+    ));
+
+    let requests = vec![SwapRequest {
+        node_id: 0,
+        input_mint: make_pubkey(1),
+        output_mint: make_pubkey(2),
+        amount: 1_000_000,
+        label: None,
+    }];
+
+    let result = engine.solve(&requests, SolverStrategy::Greedy).unwrap();
+    assert!(result.all_solved());
+}
+
+#[test]
+fn test_solver_engine_find_best_route() {
+    let mut engine = SolverEngine::new();
+    engine.register_pool(PoolInfo::constant_product(
+        make_pubkey(10), make_pubkey(1), make_pubkey(2),
+        1_000_000_000, 150_000_000_000, 30,
+    ));
+
+    let route = engine.find_best_route(&make_pubkey(1), &make_pubkey(2), 1_000_000).unwrap();
+    assert!(route.output_amount > 0);
+}
+
+#[test]
+fn test_solver_engine_fetch_and_register() {
+    let mut engine = SolverEngine::new();
+    let tokens = vec![make_pubkey(1), make_pubkey(2), make_pubkey(3)];
+    engine.fetch_and_register(&tokens);
+    assert!(engine.pool_count() >= 2);
+}
+
+#[test]
+fn test_solver_strategy_default() {
+    assert_eq!(SolverStrategy::default(), SolverStrategy::Greedy);
+}
+
+#[test]
+fn test_pool_fetcher() {
+    let fetcher = PoolFetcher::new();
+    let tokens = vec![make_pubkey(1), make_pubkey(2), make_pubkey(3)];
+    let pools = fetcher.fetch_pools(&tokens);
+    assert!(pools.len() >= 2);
+}
