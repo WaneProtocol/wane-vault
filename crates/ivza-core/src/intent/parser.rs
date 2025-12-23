@@ -84,4 +84,70 @@ pub enum IntentParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwapParams {
     pub input_mint: Pubkey,
-    pub output_mint: Pubkey,
+    pub output_mint: Pubkey,
+    pub amount_in: u64,
+    pub minimum_amount_out: Option<u64>,
+    pub user_wallet: Pubkey,
+    pub dex_program: Option<Pubkey>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiHopSwapParams {
+    pub route: Vec<Pubkey>, // mint addresses: [input, intermediate..., output]
+    pub amount_in: u64,
+    pub minimum_amount_out: Option<u64>,
+    pub user_wallet: Pubkey,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StakeParams {
+    pub amount: u64,
+    pub validator_vote_account: Pubkey,
+    pub user_wallet: Pubkey,
+    pub stake_account: Option<Pubkey>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnstakeParams {
+    pub stake_account: Pubkey,
+    pub user_wallet: Pubkey,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvideLiquidityParams {
+    pub pool: Pubkey,
+    pub token_a_mint: Pubkey,
+    pub token_b_mint: Pubkey,
+    pub amount_a: u64,
+    pub amount_b: u64,
+    pub user_wallet: Pubkey,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoveLiquidityParams {
+    pub pool: Pubkey,
+    pub lp_amount: u64,
+    pub user_wallet: Pubkey,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferParams {
+    pub mint: Pubkey,
+    pub amount: u64,
+    pub from_wallet: Pubkey,
+    pub to_wallet: Pubkey,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateAccountParams {
+    pub mint: Pubkey,
+    pub owner: Pubkey,
+}
+
+/// Parses high-level intent descriptions into structured Intent objects.
+///
+/// Supports parsing from JSON and from a simple DSL string format.
+pub struct IntentParser;
+
+impl IntentParser {
+    pub fn new() -> Self {
