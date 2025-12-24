@@ -150,4 +150,91 @@ pub struct CreateAccountParams {
 pub struct IntentParser;
 
 impl IntentParser {
-    pub fn new() -> Self {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Parse an intent from a JSON string.
+    pub fn parse_json(&self, json: &str) -> Result<Intent> {
+        let raw: serde_json::Value =
+            serde_json::from_str(json).map_err(|e| anyhow!("Invalid JSON: {}", e))?;
+
+        let intent_type_str = raw
+            .get("type")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Missing 'type' field"))?;
+
+        let intent_type = self.parse_intent_type(intent_type_str)?;
+
+        let params_value = raw
+            .get("params")
+            .ok_or_else(|| anyhow!("Missing 'params' field"))?;
+
+        let params = self.parse_params(&intent_type, params_value)?;
+
+        let mut intent = Intent::new(intent_type, params);
+
+        if let Some(label) = raw.get("label").and_then(|v| v.as_str()) {
+            intent = intent.with_label(label);
+        }
+        if let Some(slippage) = raw.get("max_slippage_bps").and_then(|v| v.as_u64()) {
+            intent = intent.with_slippage(slippage);
+        }
+        if let Some(fee) = raw.get("priority_fee").and_then(|v| v.as_u64()) {
+            intent = intent.with_priority_fee(fee);
+        }
+
+        info!("Parsed intent: {:?}", intent.intent_type);
+        Ok(intent)
+    }
+
+    /// Parse a batch of intents from a JSON array.
+    pub fn parse_batch(&self, json: &str) -> Result<Vec<Intent>> {
+        let arr: Vec<serde_json::Value> =
+            serde_json::from_str(json).map_err(|e| anyhow!("Invalid JSON array: {}", e))?;
+
+        let mut intents = Vec::new();
+        for (i, val) in arr.iter().enumerate() {
+            let json_str = serde_json::to_string(val)?;
+            match self.parse_json(&json_str) {
+                Ok(intent) => intents.push(intent),
+                Err(e) => {
+                    warn!("Failed to parse intent {}: {}", i, e);
+                    return Err(anyhow!("Failed to parse intent {}: {}", i, e));
+                }
+            }
+        }
+        Ok(intents)
+    }
+
+    /// Parse a simple DSL string format.
+    /// Format: "swap <amount> <input_mint> for <output_mint> by <wallet>"
+    ///         "stake <amount> to <validator> by <wallet>"
+    ///         "transfer <amount> <mint> from <wallet> to <wallet>"
+    pub fn parse_dsl(&self, input: &str) -> Result<Intent> {
+        let tokens: Vec<&str> = input.split_whitespace().collect();
+        if tokens.is_empty() {
+            return Err(anyhow!("Empty intent string"));
+        }
+
+        match tokens[0].to_lowercase().as_str() {
+            "swap" => self.parse_swap_dsl(&tokens),
+            "stake" => self.parse_stake_dsl(&tokens),
+            "unstake" => self.parse_unstake_dsl(&tokens),
+            "transfer" => self.parse_transfer_dsl(&tokens),
+            "provide-liquidity" | "provide_liquidity" => self.parse_provide_liquidity_dsl(&tokens),
+            "remove-liquidity" | "remove_liquidity" => self.parse_remove_liquidity_dsl(&tokens),
+            _ => Err(anyhow!("Unknown intent type: {}", tokens[0])),
+        }
+    }
+
+    fn parse_intent_type(&self, s: &str) -> Result<IntentType> {
+        match s.to_lowercase().as_str() {
+            "swap" => Ok(IntentType::Swap),
+            "multi_hop_swap" | "multihop" | "multi-hop" => Ok(IntentType::MultiHopSwap),
+            "stake" => Ok(IntentType::Stake),
+            "unstake" => Ok(IntentType::Unstake),
+            "provide_liquidity" | "add_liquidity" => Ok(IntentType::ProvideLiquidity),
+            "remove_liquidity" => Ok(IntentType::RemoveLiquidity),
+            "transfer" => Ok(IntentType::Transfer),
+            "create_account" => Ok(IntentType::CreateAccount),
