@@ -237,4 +237,92 @@ impl IntentParser {
             "provide_liquidity" | "add_liquidity" => Ok(IntentType::ProvideLiquidity),
             "remove_liquidity" => Ok(IntentType::RemoveLiquidity),
             "transfer" => Ok(IntentType::Transfer),
-            "create_account" => Ok(IntentType::CreateAccount),
+            "create_account" => Ok(IntentType::CreateAccount),
+            _ => Err(anyhow!("Unknown intent type: {}", s)),
+        }
+    }
+
+    fn parse_params(
+        &self,
+        intent_type: &IntentType,
+        value: &serde_json::Value,
+    ) -> Result<IntentParams> {
+        match intent_type {
+            IntentType::Swap => {
+                let p: SwapParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::Swap(p))
+            }
+            IntentType::MultiHopSwap => {
+                let p: MultiHopSwapParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::MultiHopSwap(p))
+            }
+            IntentType::Stake => {
+                let p: StakeParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::Stake(p))
+            }
+            IntentType::Unstake => {
+                let p: UnstakeParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::Unstake(p))
+            }
+            IntentType::ProvideLiquidity => {
+                let p: ProvideLiquidityParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::ProvideLiquidity(p))
+            }
+            IntentType::RemoveLiquidity => {
+                let p: RemoveLiquidityParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::RemoveLiquidity(p))
+            }
+            IntentType::Transfer => {
+                let p: TransferParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::Transfer(p))
+            }
+            IntentType::CreateAccount => {
+                let p: CreateAccountParams = serde_json::from_value(value.clone())?;
+                Ok(IntentParams::CreateAccount(p))
+            }
+        }
+    }
+
+    // --- DSL parsers ---
+
+    /// "swap <amount> <input_mint> for <output_mint> by <wallet>"
+    fn parse_swap_dsl(&self, tokens: &[&str]) -> Result<Intent> {
+        if tokens.len() < 6 {
+            return Err(anyhow!(
+                "Swap DSL format: swap <amount> <input_mint> for <output_mint> by <wallet>"
+            ));
+        }
+        let amount: u64 = tokens[1].parse().map_err(|_| anyhow!("Invalid amount"))?;
+        let input_mint = Pubkey::from_str(tokens[2]).map_err(|_| anyhow!("Invalid input_mint"))?;
+        // tokens[3] should be "for"
+        let output_mint =
+            Pubkey::from_str(tokens[4]).map_err(|_| anyhow!("Invalid output_mint"))?;
+        // tokens[5] should be "by"
+        let wallet = Pubkey::from_str(tokens[6]).map_err(|_| anyhow!("Invalid wallet"))?;
+
+        Ok(Intent::new(
+            IntentType::Swap,
+            IntentParams::Swap(SwapParams {
+                input_mint,
+                output_mint,
+                amount_in: amount,
+                minimum_amount_out: None,
+                user_wallet: wallet,
+                dex_program: None,
+            }),
+        ))
+    }
+
+    /// "stake <amount> to <validator> by <wallet>"
+    fn parse_stake_dsl(&self, tokens: &[&str]) -> Result<Intent> {
+        if tokens.len() < 5 {
+            return Err(anyhow!(
+                "Stake DSL format: stake <amount> to <validator> by <wallet>"
+            ));
+        }
+        let amount: u64 = tokens[1].parse().map_err(|_| anyhow!("Invalid amount"))?;
+        let validator =
+            Pubkey::from_str(tokens[3]).map_err(|_| anyhow!("Invalid validator pubkey"))?;
+        let wallet = Pubkey::from_str(tokens[5]).map_err(|_| anyhow!("Invalid wallet pubkey"))?;
+
+        Ok(Intent::new(
