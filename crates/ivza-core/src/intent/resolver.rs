@@ -125,4 +125,132 @@ impl IntentResolver {
             ],
             self.encode_swap_data(params.amount_in, params.minimum_amount_out.unwrap_or(0)),
         )
-        .with_label("swap");
+        .with_label("swap");
+
+        let swap_node = builder.add_node_with_cu(vec![swap_ix], 300_000);
+
+        // Edge: create_ata -> swap (the swap needs the output ATA to exist).
+        builder.add_data_dependency(create_node, swap_node)?;
+
+        builder.build()
+    }
+
+    /// Resolve a multi-hop swap intent.
+    /// Graph: [create_ata_0] -> [swap_0] -> [swap_1] -> ... -> [swap_n-1]
+    /// Each swap depends on the previous one (output of swap_i is input of swap_i+1).
+    fn resolve_multi_hop_swap(
+        &self,
+        params: &MultiHopSwapParams,
+        _intent: &Intent,
+    ) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+
+        if params.route.len() < 2 {
+            return Err(anyhow!("Multi-hop swap requires at least 2 mints in route"));
+        }
+
+        let num_hops = params.route.len() - 1;
+        let mut prev_node: Option<NodeId> = None;
+        let mut create_nodes: Vec<NodeId> = Vec::new();
+
+        for hop in 0..num_hops {
+            let input_mint = params.route[hop];
+            let output_mint = params.route[hop + 1];
+            let input_ata = self.derive_ata(&params.user_wallet, &input_mint);
+            let output_ata = self.derive_ata(&params.user_wallet, &output_mint);
+
+            // Create intermediate/output ATAs as needed.
+            if hop > 0 || hop == num_hops - 1 {
+                let create_ix = InstructionData::new(
+                    self.ata_program,
+                    vec![
+                        AccountAccessEntry::write(params.user_wallet),
+                        AccountAccessEntry::write(output_ata),
+                        AccountAccessEntry::read(params.user_wallet),
+                        AccountAccessEntry::read(output_mint),
+                        AccountAccessEntry::read(self.system_program),
+                        AccountAccessEntry::read(self.token_program),
+                    ],
+                    vec![0],
+                )
+                .with_label(format!("create_ata_hop_{}", hop));
+
+                let create_node =
+                    builder.add_labeled_node(format!("create_ata_hop_{}", hop), vec![create_ix]);
+
+                if let Some(_prev) = prev_node {
+                    // The create ATA can happen in parallel with or before the swap,
+                    // but the swap needs it. We add a dependency from create to the swap below.
+                }
+                create_nodes.push(create_node);
+            }
+
+            // Swap instruction for this hop.
+            let amount = if hop == 0 { params.amount_in } else { 0 }; // Intermediate amounts are dynamic.
+            let swap_ix = InstructionData::new(
+                self.token_program,
+                vec![
+                    AccountAccessEntry::write(input_ata),
+                    AccountAccessEntry::write(output_ata),
+                    AccountAccessEntry::read(params.user_wallet),
+                    AccountAccessEntry::read(input_mint),
+                    AccountAccessEntry::read(output_mint),
+                ],
+                self.encode_swap_data(amount, 0),
+            )
+            .with_label(format!("swap_hop_{}", hop));
+
+            let swap_node = builder.add_labeled_node(format!("swap_hop_{}", hop), vec![swap_ix]);
+
+            // Chain swaps sequentially.
+            if let Some(prev) = prev_node {
+                builder.add_data_dependency(prev, swap_node)?;
+            }
+
+            // Create ATA must complete before swap.
+            if let Some(&create_node) = create_nodes.last() {
+                // Only add if the create_node is for this hop's output.
+                builder.add_data_dependency(create_node, swap_node)?;
+            }
+
+            prev_node = Some(swap_node);
+        }
+
+        builder.build()
+    }
+
+    /// Resolve a stake intent.
+    /// Graph: [create_stake_account] -> [delegate_stake]
+    fn resolve_stake(&self, params: &StakeParams, _intent: &Intent) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+
+        let stake_account = params
+            .stake_account
+            .unwrap_or_else(|| self.derive_stake_account(&params.user_wallet, 0));
+
+        // Node 1: Create and initialize stake account.
+        let create_ix = InstructionData::new(
+            self.system_program,
+            vec![
+                AccountAccessEntry::write(params.user_wallet), // payer
+                AccountAccessEntry::write(stake_account),      // new stake account
+            ],
+            self.encode_u64(params.amount),
+        )
+        .with_label("create_stake_account");
+
+        let init_ix = InstructionData::new(
+            self.stake_program,
+            vec![
+                AccountAccessEntry::write(stake_account),
+                AccountAccessEntry::read(params.user_wallet), // staker/withdrawer
+            ],
+            vec![0], // Initialize instruction.
+        )
+        .with_label("init_stake_account");
+
+        let create_node = builder.add_labeled_node("create_stake", vec![create_ix, init_ix]);
+
+        // Node 2: Delegate to validator.
+        let delegate_ix = InstructionData::new(
+            self.stake_program,
