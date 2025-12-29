@@ -253,4 +253,132 @@ impl IntentResolver {
 
         // Node 2: Delegate to validator.
         let delegate_ix = InstructionData::new(
-            self.stake_program,
+            self.stake_program,
+            vec![
+                AccountAccessEntry::write(stake_account),
+                AccountAccessEntry::read(params.validator_vote_account),
+                AccountAccessEntry::read(params.user_wallet), // stake authority
+            ],
+            vec![2], // Delegate instruction discriminator.
+        )
+        .with_label("delegate_stake");
+
+        let delegate_node = builder.add_labeled_node("delegate_stake", vec![delegate_ix]);
+
+        builder.add_data_dependency(create_node, delegate_node)?;
+
+        builder.build()
+    }
+
+    /// Resolve an unstake intent.
+    /// Graph: [deactivate] -> [withdraw] (withdraw happens after cooldown in practice).
+    fn resolve_unstake(
+        &self,
+        params: &UnstakeParams,
+        _intent: &Intent,
+    ) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+
+        // Node 1: Deactivate.
+        let deactivate_ix = InstructionData::new(
+            self.stake_program,
+            vec![
+                AccountAccessEntry::write(params.stake_account),
+                AccountAccessEntry::read(params.user_wallet),
+            ],
+            vec![5], // Deactivate instruction.
+        )
+        .with_label("deactivate_stake");
+
+        let deactivate_node = builder.add_labeled_node("deactivate_stake", vec![deactivate_ix]);
+
+        // Node 2: Withdraw (would execute after cooldown epoch in reality).
+        let withdraw_ix = InstructionData::new(
+            self.stake_program,
+            vec![
+                AccountAccessEntry::write(params.stake_account),
+                AccountAccessEntry::write(params.user_wallet), // recipient
+                AccountAccessEntry::read(params.user_wallet),  // withdraw authority
+            ],
+            vec![4], // Withdraw instruction.
+        )
+        .with_label("withdraw_stake");
+
+        let withdraw_node = builder.add_labeled_node("withdraw_stake", vec![withdraw_ix]);
+
+        builder.add_order_dependency(deactivate_node, withdraw_node)?;
+
+        builder.build()
+    }
+
+    /// Resolve a provide liquidity intent.
+    /// Graph: [create_lp_ata] -> [deposit_a + deposit_b] -> [add_liquidity]
+    fn resolve_provide_liquidity(
+        &self,
+        params: &ProvideLiquidityParams,
+        _intent: &Intent,
+    ) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+
+        let ata_a = self.derive_ata(&params.user_wallet, &params.token_a_mint);
+        let ata_b = self.derive_ata(&params.user_wallet, &params.token_b_mint);
+
+        // Node 1: Transfer token A to pool.
+        let transfer_a_ix = InstructionData::new(
+            self.token_program,
+            vec![
+                AccountAccessEntry::write(ata_a),
+                AccountAccessEntry::write(params.pool),
+                AccountAccessEntry::read(params.user_wallet),
+            ],
+            self.encode_u64(params.amount_a),
+        )
+        .with_label("transfer_token_a");
+
+        let transfer_a_node = builder.add_labeled_node("transfer_a", vec![transfer_a_ix]);
+
+        // Node 2: Transfer token B to pool.
+        let transfer_b_ix = InstructionData::new(
+            self.token_program,
+            vec![
+                AccountAccessEntry::write(ata_b),
+                AccountAccessEntry::write(params.pool),
+                AccountAccessEntry::read(params.user_wallet),
+            ],
+            self.encode_u64(params.amount_b),
+        )
+        .with_label("transfer_token_b");
+
+        let transfer_b_node = builder.add_labeled_node("transfer_b", vec![transfer_b_ix]);
+
+        // Node 3: Add liquidity instruction.
+        let add_liq_ix = InstructionData::new(
+            params.pool, // Pool program is the program to call.
+            vec![
+                AccountAccessEntry::write(params.pool),
+                AccountAccessEntry::read(params.user_wallet),
+                AccountAccessEntry::read(params.token_a_mint),
+                AccountAccessEntry::read(params.token_b_mint),
+            ],
+            vec![1], // Add liquidity discriminator.
+        )
+        .with_label("add_liquidity");
+
+        let add_liq_node = builder.add_labeled_node("add_liquidity", vec![add_liq_ix]);
+
+        // Both transfers must complete before adding liquidity.
+        builder.add_data_dependency(transfer_a_node, add_liq_node)?;
+        builder.add_data_dependency(transfer_b_node, add_liq_node)?;
+
+        builder.build()
+    }
+
+    /// Resolve a remove liquidity intent.
+    fn resolve_remove_liquidity(
+        &self,
+        params: &RemoveLiquidityParams,
+        _intent: &Intent,
+    ) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+
+        let remove_ix = InstructionData::new(
