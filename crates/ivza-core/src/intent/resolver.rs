@@ -381,4 +381,132 @@ impl IntentResolver {
     ) -> Result<TransactionGraph> {
         let mut builder = TransactionGraphBuilder::new();
 
-        let remove_ix = InstructionData::new(
+        let remove_ix = InstructionData::new(
+            params.pool,
+            vec![
+                AccountAccessEntry::write(params.pool),
+                AccountAccessEntry::read(params.user_wallet),
+            ],
+            self.encode_u64(params.lp_amount),
+        )
+        .with_label("remove_liquidity");
+
+        builder.add_labeled_node("remove_liquidity", vec![remove_ix]);
+
+        builder.build()
+    }
+
+    /// Resolve a transfer intent.
+    fn resolve_transfer(
+        &self,
+        params: &TransferParams,
+        _intent: &Intent,
+    ) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+
+        let from_ata = self.derive_ata(&params.from_wallet, &params.mint);
+        let to_ata = self.derive_ata(&params.to_wallet, &params.mint);
+
+        // Node 1: Create destination ATA if needed.
+        let create_ix = InstructionData::new(
+            self.ata_program,
+            vec![
+                AccountAccessEntry::write(params.from_wallet), // payer
+                AccountAccessEntry::write(to_ata),
+                AccountAccessEntry::read(params.to_wallet), // owner
+                AccountAccessEntry::read(params.mint),
+                AccountAccessEntry::read(self.system_program),
+                AccountAccessEntry::read(self.token_program),
+            ],
+            vec![0],
+        )
+        .with_label("create_dest_ata");
+
+        let create_node = builder.add_labeled_node("create_dest_ata", vec![create_ix]);
+
+        // Node 2: Transfer.
+        let transfer_ix = InstructionData::new(
+            self.token_program,
+            vec![
+                AccountAccessEntry::write(from_ata),
+                AccountAccessEntry::write(to_ata),
+                AccountAccessEntry::read(params.from_wallet), // authority
+            ],
+            self.encode_u64(params.amount),
+        )
+        .with_label("transfer");
+
+        let transfer_node = builder.add_labeled_node("transfer", vec![transfer_ix]);
+
+        builder.add_data_dependency(create_node, transfer_node)?;
+
+        builder.build()
+    }
+
+    /// Resolve a create account intent.
+    fn resolve_create_account(
+        &self,
+        params: &CreateAccountParams,
+        _intent: &Intent,
+    ) -> Result<TransactionGraph> {
+        let mut builder = TransactionGraphBuilder::new();
+
+        let ata = self.derive_ata(&params.owner, &params.mint);
+
+        let create_ix = InstructionData::new(
+            self.ata_program,
+            vec![
+                AccountAccessEntry::write(params.owner), // payer
+                AccountAccessEntry::write(ata),
+                AccountAccessEntry::read(params.owner),
+                AccountAccessEntry::read(params.mint),
+                AccountAccessEntry::read(self.system_program),
+                AccountAccessEntry::read(self.token_program),
+            ],
+            vec![0],
+        )
+        .with_label("create_ata");
+
+        builder.add_labeled_node("create_ata", vec![create_ix]);
+
+        builder.build()
+    }
+
+    // --- Helpers ---
+
+    /// Derive an associated token account address (deterministic PDA).
+    /// This is a simplified version; the real derivation uses find_program_address.
+    fn derive_ata(&self, wallet: &Pubkey, mint: &Pubkey) -> Pubkey {
+        // Use a deterministic derivation based on the wallet and mint.
+        let seeds = [wallet.as_ref(), self.token_program.as_ref(), mint.as_ref()];
+        let (ata, _bump) = Pubkey::find_program_address(&seeds, &self.ata_program);
+        ata
+    }
+
+    /// Derive a stake account address.
+    fn derive_stake_account(&self, wallet: &Pubkey, index: u64) -> Pubkey {
+        let seeds = [wallet.as_ref(), &index.to_le_bytes()];
+        let (addr, _) = Pubkey::find_program_address(&seeds, &self.stake_program);
+        addr
+    }
+
+    /// Encode a u64 value as little-endian bytes.
+    fn encode_u64(&self, value: u64) -> Vec<u8> {
+        value.to_le_bytes().to_vec()
+    }
+
+    /// Encode swap instruction data.
+    fn encode_swap_data(&self, amount_in: u64, minimum_out: u64) -> Vec<u8> {
+        let mut data = Vec::with_capacity(17);
+        data.push(1); // Swap discriminator.
+        data.extend_from_slice(&amount_in.to_le_bytes());
+        data.extend_from_slice(&minimum_out.to_le_bytes());
+        data
+    }
+}
+
+impl Default for IntentResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
