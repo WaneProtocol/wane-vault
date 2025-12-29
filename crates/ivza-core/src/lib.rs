@@ -446,4 +446,100 @@ mod tests {
         let mut graph = TransactionGraph::new();
         // Diamond shape: 0 -> 1, 0 -> 2, 1 -> 3, 2 -> 3
         for i in 0..4 {
-            graph.insert_node(GraphNode::new(i, vec![]).with_estimated_cu(100));
+            graph.insert_node(GraphNode::new(i, vec![]).with_estimated_cu(100));
+        }
+        graph
+            .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+            .unwrap();
+        graph
+            .add_edge(GraphEdge::new(0, 2, DependencyType::DataDependency))
+            .unwrap();
+        graph
+            .add_edge(GraphEdge::new(1, 3, DependencyType::DataDependency))
+            .unwrap();
+        graph
+            .add_edge(GraphEdge::new(2, 3, DependencyType::DataDependency))
+            .unwrap();
+
+        let analyzer = ParallelismAnalyzer::new();
+        let result = analyzer.analyze(&graph).unwrap();
+
+        // 3 levels: {0}, {1, 2}, {3}
+        assert_eq!(result.levels.len(), 3);
+        assert_eq!(result.max_parallelism, 2);
+        assert_eq!(result.levels[1].width(), 2);
+    }
+
+    #[test]
+    fn test_execution_planner() {
+        use crate::graph::{GraphEdge, GraphNode, TransactionGraph};
+        use crate::types::DependencyType;
+
+        let program = make_pubkey(0);
+
+        let mut graph = TransactionGraph::new();
+
+        // 4 nodes: 0 -> 2, 1 -> 2, 2 -> 3
+        // Nodes 0 and 1 can run in parallel, then 2, then 3.
+        let ix0 = make_ix(program, &[], &[make_pubkey(1)], "w1");
+        let ix1 = make_ix(program, &[], &[make_pubkey(2)], "w2");
+        let ix2 = make_ix(
+            program,
+            &[make_pubkey(1), make_pubkey(2)],
+            &[make_pubkey(3)],
+            "rw",
+        );
+        let ix3 = make_ix(program, &[make_pubkey(3)], &[], "r3");
+
+        graph.insert_node(GraphNode::new(0, vec![ix0]));
+        graph.insert_node(GraphNode::new(1, vec![ix1]));
+        graph.insert_node(GraphNode::new(2, vec![ix2]));
+        graph.insert_node(GraphNode::new(3, vec![ix3]));
+
+        graph
+            .add_edge(GraphEdge::new(0, 2, DependencyType::DataDependency))
+            .unwrap();
+        graph
+            .add_edge(GraphEdge::new(1, 2, DependencyType::DataDependency))
+            .unwrap();
+        graph
+            .add_edge(GraphEdge::new(2, 3, DependencyType::DataDependency))
+            .unwrap();
+
+        let planner = ExecutionPlanner::new();
+        let plan = planner.plan(&graph).unwrap();
+
+        // Should have 3 lanes minimum: {0,1}, {2}, {3}
+        assert!(plan.num_lanes() >= 2);
+        assert_eq!(plan.total_transactions, 4);
+    }
+
+    #[test]
+    fn test_full_pipeline() {
+        let engine = IvzaEngine::new();
+        let program = make_pubkey(0);
+
+        let ix1 = make_ix(program, &[], &[make_pubkey(1)], "w1");
+        let ix2 = make_ix(program, &[], &[make_pubkey(2)], "w2");
+        let ix3 = make_ix(program, &[make_pubkey(1)], &[make_pubkey(3)], "rw");
+
+        let plan = engine.process(vec![ix1, ix2, ix3]).unwrap();
+
+        assert!(plan.total_transactions >= 2);
+        assert!(plan.num_lanes() >= 1);
+    }
+
+    #[test]
+    fn test_lane_conflict_check() {
+        use crate::graph::GraphNode;
+        use crate::scheduler::ExecutionLane;
+
+        let program = make_pubkey(0);
+
+        let ix1 = make_ix(program, &[], &[make_pubkey(1)], "w1");
+        let ix2 = make_ix(program, &[make_pubkey(1)], &[], "r1");
+        let ix3 = make_ix(program, &[], &[make_pubkey(2)], "w2");
+
+        let node1 = GraphNode::new(0, vec![ix1]);
+        let node2 = GraphNode::new(1, vec![ix2]);
+        let node3 = GraphNode::new(2, vec![ix3]);
