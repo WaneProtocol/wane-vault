@@ -106,4 +106,167 @@ pub struct EngineConfig {
     pub total_settled: u64,
 
     /// Total compute units consumed across all settled graphs.
-    pub total_compute_units: u64,
+    pub total_compute_units: u64,
+
+    /// Bump seed for PDA derivation.
+    pub bump: u8,
+
+    /// Reserved space for future upgrades.
+    pub _reserved: [u8; 64],
+}
+
+impl EngineConfig {
+    /// Account discriminator (8) + fields.
+    pub const LEN: usize = 8  // discriminator
+        + 32  // authority
+        + 2   // fee_bps
+        + 2   // max_nodes_per_graph
+        + 1   // max_lanes
+        + 1   // paused
+        + 8   // total_graphs
+        + 8   // total_settled
+        + 8   // total_compute_units
+        + 1   // bump
+        + 64; // _reserved
+}
+
+/// A submitted transaction graph awaiting parallel execution.
+#[account]
+#[derive(Debug)]
+pub struct TransactionGraph {
+    /// Unique 32-byte identifier for this graph.
+    pub graph_id: [u8; 32],
+
+    /// The owner / submitter of the graph.
+    pub owner: Pubkey,
+
+    /// Serialized node data (application-specific encoding).
+    pub nodes_data: Vec<u8>,
+
+    /// Serialized edge data (application-specific encoding).
+    pub edges_data: Vec<u8>,
+
+    /// Number of nodes in the graph.
+    pub node_count: u16,
+
+    /// Number of edges in the graph.
+    pub edge_count: u16,
+
+    /// Current status of the graph.
+    pub status: GraphStatus,
+
+    /// Unix timestamp when the graph was created.
+    pub created_at: i64,
+
+    /// Number of parallel lanes this graph is split into.
+    pub lane_count: u8,
+
+    /// Bitmask of lanes that have been executed (up to 32 lanes).
+    pub lanes_executed: u32,
+
+    /// Number of lanes that completed successfully.
+    pub lanes_succeeded: u8,
+
+    /// Number of lanes that failed.
+    pub lanes_failed: u8,
+
+    /// Total compute units consumed across all executed lanes.
+    pub total_compute_units: u64,
+
+    /// Bump seed for PDA derivation.
+    pub bump: u8,
+
+    /// Reserved space for future upgrades.
+    pub _reserved: [u8; 32],
+}
+
+impl TransactionGraph {
+    /// Compute the space needed for a graph with given data sizes.
+    pub fn space(nodes_data_len: usize, edges_data_len: usize) -> usize {
+        8       // discriminator
+        + 32    // graph_id
+        + 32    // owner
+        + 4 + nodes_data_len  // nodes_data (vec prefix + data)
+        + 4 + edges_data_len  // edges_data (vec prefix + data)
+        + 2     // node_count
+        + 2     // edge_count
+        + 1     // status
+        + 8     // created_at
+        + 1     // lane_count
+        + 4     // lanes_executed
+        + 1     // lanes_succeeded
+        + 1     // lanes_failed
+        + 8     // total_compute_units
+        + 1     // bump
+        + 32 // _reserved
+    }
+
+    /// Check whether a specific lane has been executed.
+    pub fn is_lane_executed(&self, lane_index: u8) -> bool {
+        self.lanes_executed & (1u32 << lane_index) != 0
+    }
+
+    /// Mark a specific lane as executed.
+    pub fn mark_lane_executed(&mut self, lane_index: u8) {
+        self.lanes_executed |= 1u32 << lane_index;
+    }
+
+    /// Returns true if all lanes have been executed.
+    pub fn all_lanes_executed(&self) -> bool {
+        if self.lane_count == 0 {
+            return true;
+        }
+        let mask = if self.lane_count >= 32 {
+            u32::MAX
+        } else {
+            (1u32 << self.lane_count) - 1
+        };
+        (self.lanes_executed & mask) == mask
+    }
+
+    /// Returns the number of lanes that have been executed so far.
+    pub fn executed_lane_count(&self) -> u8 {
+        self.lanes_executed.count_ones() as u8
+    }
+}
+
+/// Record of a single lane execution within a graph.
+#[account]
+#[derive(Debug)]
+pub struct ExecutionRecord {
+    /// The graph this execution belongs to.
+    pub graph_id: [u8; 32],
+
+    /// Index of the lane that was executed.
+    pub lane_index: u8,
+
+    /// The executor (signer) who ran this lane.
+    pub executor: Pubkey,
+
+    /// Unix timestamp when the lane was executed.
+    pub executed_at: i64,
+
+    /// Whether the lane execution succeeded.
+    pub success: bool,
+
+    /// Compute units consumed by this lane.
+    pub compute_units_used: u64,
+
+    /// Bump seed for PDA derivation.
+    pub bump: u8,
+
+    /// Reserved space.
+    pub _reserved: [u8; 16],
+}
+
+impl ExecutionRecord {
+    pub const LEN: usize = 8  // discriminator
+        + 32  // graph_id
+        + 1   // lane_index
+        + 32  // executor
+        + 8   // executed_at
+        + 1   // success
+        + 8   // compute_units_used
+        + 1   // bump
+        + 16; // _reserved
+}
