@@ -78,3 +78,83 @@ impl CliConfig {
             Self::load_from_file(Path::new(path))?
         } else {
             let default_path = Self::default_config_path();
+            if default_path.exists() {
+                Self::load_from_file(&default_path)?
+            } else {
+                Self::default()
+            }
+        };
+
+        // Override with environment variables if set.
+        if let Ok(url) = std::env::var("IVZA_RPC_URL") {
+            config.rpc_url = url;
+        }
+        if let Ok(kp) = std::env::var("IVZA_KEYPAIR") {
+            config.keypair_path = kp;
+        }
+        if let Ok(pid) = std::env::var("IVZA_PROGRAM_ID") {
+            config.program_id = pid;
+        }
+        if let Ok(c) = std::env::var("IVZA_COMMITMENT") {
+            config.commitment = c;
+        }
+        if let Ok(price) = std::env::var("IVZA_CU_PRICE") {
+            if let Ok(v) = price.parse::<u64>() {
+                config.max_compute_unit_price = v;
+            }
+        }
+
+        Ok(config)
+    }
+
+    /// Load configuration from a specific file path.
+    fn load_from_file(path: &Path) -> Result<Self> {
+        let data = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config from {}", path.display()))?;
+        let config: Self = serde_json::from_str(&data)
+            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+        Ok(config)
+    }
+
+    /// Save the current configuration to disk at the default location.
+    pub fn save(&self) -> Result<()> {
+        let path = Self::default_config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create config dir {}", parent.display()))?;
+        }
+        let data = serde_json::to_string_pretty(self)?;
+        std::fs::write(&path, data)
+            .with_context(|| format!("Failed to write config to {}", path.display()))?;
+        Ok(())
+    }
+
+    /// Returns the default config file path: ~/.ivza/config.json
+    pub fn default_config_path() -> PathBuf {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(CONFIG_DIR).join(CONFIG_FILE)
+    }
+
+    /// Parse the commitment string into a CommitmentLevel.
+    pub fn commitment_level(&self) -> CommitmentLevel {
+        match self.commitment.as_str() {
+            "processed" => CommitmentLevel::Processed,
+            "confirmed" => CommitmentLevel::Confirmed,
+            "finalized" => CommitmentLevel::Finalized,
+            _ => CommitmentLevel::Confirmed,
+        }
+    }
+}
+
+/// Resolve the default keypair path based on the user's home directory.
+fn dirs_default_keypair() -> String {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home)
+        .join(DEFAULT_KEYPAIR_REL)
+        .to_string_lossy()
+        .to_string()
+}
