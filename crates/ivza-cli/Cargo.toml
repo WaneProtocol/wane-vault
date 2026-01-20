@@ -10,3 +10,15 @@ name = "ivza"
 path = "src/main.rs"
 
 [dependencies]
+ivza-core = { workspace = true }
+ivza-solver = { workspace = true }
+solana-sdk = { workspace = true }
+solana-client = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+bs58 = { workspace = true }
