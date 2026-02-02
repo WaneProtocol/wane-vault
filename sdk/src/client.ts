@@ -318,3 +318,323 @@ export class IvzaClient {
       if (result.success) {
         tracked.status = GraphStatus.Settled;
       } else if (result.failedNodes.length < tracked.plan.lanes.flatMap((l) => l.nodes).length) {
+        tracked.status = GraphStatus.PartiallySettled;
+      } else {
+        tracked.status = GraphStatus.Failed;
+      }
+
+      this.notifySettled(graphId, tracked.status, result);
+    } catch (err) {
+      tracked.status = GraphStatus.Failed;
+      tracked.settledAt = Date.now();
+      this.notifySettled(graphId, GraphStatus.Failed, null);
+      throw err;
+    }
+  }
+
+  /**
+   * Get the status of a previously submitted graph.
+   */
+  getGraphStatus(graphId: string): GraphState {
+    const tracked = this.trackedGraphs.get(graphId);
+    if (!tracked) {
+      throw new Error(`Graph ${graphId} not found`);
+    }
+
+    const lanesTotal = tracked.plan.lanes.length;
+    let lanesCompleted = 0;
+    const failedNodes: string[] = [];
+
+    if (tracked.result) {
+      for (const laneResult of tracked.result.laneResults) {
+        if (laneResult.success) lanesCompleted++;
+        for (const txResult of laneResult.transactionResults) {
+          if (!txResult.success) failedNodes.push(txResult.nodeId);
+        }
+      }
+    }
+
+    return {
+      graphId,
+      status: tracked.status,
+      lanesCompleted,
+      lanesTotal,
+      failedNodes,
+      settledAt: tracked.settledAt,
+    };
+  }
+
+  /**
+   * Execute a graph locally (without on-chain submission tracking).
+   * Blocks until execution completes.
+   */
+  async executeLocally(graph: TransactionGraph): Promise<ExecutionResult> {
+    const plan = this.planGraph(graph);
+    return this.executor.execute(plan);
+  }
+
+  /**
+   * Execute a graph via Jito bundles.
+   */
+  async executeViaJito(graph: TransactionGraph): Promise<BundleSubmissionResult[]> {
+    const plan = this.planGraph(graph);
+    return this.bundleBuilder.submitPlan(plan);
+  }
+
+  /**
+   * Solve: parse an intent, build a graph, analyze, and plan.
+   * Does not execute.
+   */
+  solve(
+    input: string | object,
+    options?: SolveOptions
+  ): {
+    intent: Intent;
+    graph: TransactionGraph;
+    analysis: AnalysisResult;
+    plan: ExecutionPlan;
+    fingerprint: string;
+  } {
+    const intent = this.parseIntent(input);
+    const graph = this.buildGraph(intent);
+
+    if (options?.autoDetectDeps !== false) {
+      graph.autoDetectDependencies();
+    }
+
+    const analysis = this.analyzeGraph(graph);
+    const plan = this.planGraph(graph, {
+      maxLanes: this.config.maxParallelLanes,
+    });
+    const fingerprint = fingerprintGraph(graph);
+
+    return { intent, graph, analysis, plan, fingerprint };
+  }
+
+  /**
+   * Full pipeline: parse intent, build graph, plan, and execute.
+   */
+  async processIntent(
+    input: string | object,
+    options?: ProcessOptions
+  ): Promise<{
+    intent: Intent;
+    graph: TransactionGraph;
+    plan: ExecutionPlan;
+    result: ExecutionResult | BundleSubmissionResult[];
+  }> {
+    const { intent, graph, plan } = this.solve(input, options);
+
+    let result: ExecutionResult | BundleSubmissionResult[];
+
+    if (options?.useJito) {
+      result = await this.bundleBuilder.submitPlan(plan);
+    } else {
+      if (options?.simulate) {
+        const simResults = await this.executor.simulatePlan(plan);
+        const failures = Array.from(simResults.entries()).filter(
+          ([, r]) => !r.success
+        );
+        if (failures.length > 0) {
+          const failureMessages = failures
+            .map(([id, r]) => `${id}: ${r.error}`)
+            .join("; ");
+          throw new Error(`Simulation failed: ${failureMessages}`);
+        }
+      }
+
+      result = await this.executor.execute(plan);
+    }
+
+    return { intent, graph, plan, result };
+  }
+
+  /**
+   * Register a callback for when a specific graph settles.
+   */
+  onGraphSettled(graphId: string, callback: GraphSettledCallback): () => void {
+    const existing = this.settledCallbacks.get(graphId) ?? [];
+    existing.push(callback);
+    this.settledCallbacks.set(graphId, existing);
+
+    // If already settled, fire immediately
+    const tracked = this.trackedGraphs.get(graphId);
+    if (
+      tracked &&
+      (tracked.status === GraphStatus.Settled ||
+        tracked.status === GraphStatus.Failed ||
+        tracked.status === GraphStatus.PartiallySettled)
+    ) {
+      callback(graphId, tracked.status, tracked.result);
+    }
+
+    return () => {
+      const callbacks = this.settledCallbacks.get(graphId) ?? [];
+      this.settledCallbacks.set(
+        graphId,
+        callbacks.filter((cb) => cb !== callback)
+      );
+    };
+  }
+
+  /**
+   * Register a global listener for all graph settlements.
+   */
+  onAnyGraphSettled(callback: GraphSettledCallback): () => void {
+    this.globalListeners.push(callback);
+    return () => {
+      this.globalListeners = this.globalListeners.filter(
+        (cb) => cb !== callback
+      );
+    };
+  }
+
+  /**
+   * Notify all registered listeners about graph settlement.
+   */
+  private notifySettled(
+    graphId: string,
+    status: GraphStatus,
+    result: ExecutionResult | null
+  ): void {
+    // Graph-specific callbacks
+    const callbacks = this.settledCallbacks.get(graphId) ?? [];
+    for (const cb of callbacks) {
+      try {
+        cb(graphId, status, result);
+      } catch {
+        // Listener errors are non-fatal
+      }
+    }
+
+    // Global callbacks
+    for (const cb of this.globalListeners) {
+      try {
+        cb(graphId, status, result);
+      } catch {
+        // Listener errors are non-fatal
+      }
+    }
+  }
+
+  /**
+   * Register an executor event listener (tx_submitted, tx_confirmed, etc.)
+   */
+  onExecutorEvent(listener: ExecutorEventListener): () => void {
+    return this.executor.on(listener);
+  }
+
+  /**
+   * Create a new TransactionGraphBuilder for manual graph construction.
+   */
+  createGraphBuilder(): TransactionGraphBuilder {
+    return new TransactionGraphBuilder();
+  }
+
+  /**
+   * Get the connection manager for advanced endpoint management.
+   */
+  getConnectionManager(): ConnectionManager {
+    return this.connectionManager;
+  }
+
+  /**
+   * Get the underlying ParallelExecutor.
+   */
+  getExecutor(): ParallelExecutor {
+    return this.executor;
+  }
+
+  /**
+   * Get the underlying BundleBuilder.
+   */
+  getBundleBuilder(): BundleBuilder {
+    return this.bundleBuilder;
+  }
+
+  /**
+   * Get the active Solana connection.
+   */
+  getConnection(): Connection {
+    return this.connectionManager.getConnection();
+  }
+
+  /**
+   * Get the wallet adapter.
+   */
+  getWallet(): WalletAdapter {
+    return this.wallet;
+  }
+
+  /**
+   * Get the current configuration.
+   */
+  getConfig(): Required<IvzaConfig> {
+    return { ...this.config };
+  }
+
+  /**
+   * Get the program ID for the iVZA on-chain program.
+   */
+  getProgramId(): PublicKey {
+    return new PublicKey(this.config.programId);
+  }
+
+  /**
+   * Get all tracked graph IDs.
+   */
+  getTrackedGraphIds(): string[] {
+    return Array.from(this.trackedGraphs.keys());
+  }
+
+  /**
+   * Get a summary of all tracked graphs.
+   */
+  getTrackedGraphsSummary(): Array<{
+    graphId: string;
+    status: GraphStatus;
+    laneCount: number;
+    createdAt: number;
+    settledAt?: number;
+  }> {
+    return Array.from(this.trackedGraphs.values()).map((t) => ({
+      graphId: t.graphId,
+      status: t.status,
+      laneCount: t.plan.lanes.length,
+      createdAt: t.createdAt,
+      settledAt: t.settledAt,
+    }));
+  }
+
+  /**
+   * Clear all tracked graphs and callbacks.
+   */
+  clearTrackedGraphs(): void {
+    this.trackedGraphs.clear();
+    this.settledCallbacks.clear();
+  }
+
+  /**
+   * Serialize a graph for storage or wire transfer.
+   */
+  serializeGraph(graph: TransactionGraph): SerializedGraph {
+    return serializeGraph(graph);
+  }
+
+  /**
+   * Deserialize a graph from storage or wire transfer.
+   */
+  deserializeGraph(data: SerializedGraph): TransactionGraph {
+    return deserializeGraph(data);
+  }
+
+  /**
+   * Destroy the client and release all resources.
+   */
+  destroy(): void {
+    this.connectionManager.destroy();
+    this.trackedGraphs.clear();
+    this.settledCallbacks.clear();
+    this.globalListeners = [];
+  }
+}
