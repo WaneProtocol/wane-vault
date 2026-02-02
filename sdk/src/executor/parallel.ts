@@ -276,3 +276,280 @@ export class ParallelExecutor {
         const sendOptions: SendOptions = {
           skipPreflight: this.options.skipPreflight,
           preflightCommitment: this.options.commitment,
+          minContextSlot: this.options.minContextSlot,
+        };
+
+        const signature = await this.connection.sendRawTransaction(
+          signedTx.serialize(),
+          sendOptions
+        );
+
+        this.emit({ type: "tx_submitted", nodeId: node.id, signature });
+
+        // Confirm the transaction
+        const confirmation = await this.confirmTransaction(signature);
+
+        if (confirmation.error) {
+          throw new Error(`Confirmation failed: ${confirmation.error}`);
+        }
+
+        this.emit({
+          type: "tx_confirmed",
+          nodeId: node.id,
+          signature,
+          slot: confirmation.slot,
+        });
+
+        return {
+          nodeId: node.id,
+          signature,
+          success: true,
+          slot: confirmation.slot,
+          computeUnitsUsed: confirmation.computeUnitsUsed,
+          confirmationTime: confirmation.timeMs,
+        };
+      } catch (err: unknown) {
+        const errorMessage =
+          err instanceof Error ? err.message : String(err);
+        lastError = errorMessage;
+
+        const retriesLeft = maxRetries - attempt;
+
+        this.emit({
+          type: "tx_failed",
+          nodeId: node.id,
+          error: errorMessage,
+          retriesLeft,
+        });
+
+        // Don't retry on certain errors
+        if (this.isNonRetryableError(errorMessage)) {
+          break;
+        }
+
+        if (attempt < maxRetries) {
+          const delay = this.calculateBackoff(attempt);
+          await this.sleep(delay);
+        }
+      }
+    }
+
+    return {
+      nodeId: node.id,
+      signature: null,
+      success: false,
+      error: lastError,
+    };
+  }
+
+  /**
+   * Build a Transaction from a node, adding compute budget instructions.
+   */
+  private async buildTransaction(node: TransactionNode): Promise<Transaction> {
+    const tx = new Transaction();
+
+    // Set compute unit limit
+    const cuLimit = node.estimatedCu || this.options.defaultComputeUnits;
+    tx.add(
+      ComputeBudgetProgram.setComputeUnitLimit({
+        units: cuLimit,
+      })
+    );
+
+    // Set priority fee
+    tx.add(
+      ComputeBudgetProgram.setComputeUnitPrice({
+        microLamports: this.options.defaultPriorityFee,
+      })
+    );
+
+    // Add the node's instructions
+    for (const ix of node.instructions) {
+      tx.add(ix);
+    }
+
+    // Set fee payer and recent blockhash
+    tx.feePayer = this.wallet.publicKey;
+    const { blockhash, lastValidBlockHeight } =
+      await this.connection.getLatestBlockhash(this.options.commitment);
+    tx.recentBlockhash = blockhash;
+
+    return tx;
+  }
+
+  /**
+   * Confirm a transaction with timeout.
+   */
+  private async confirmTransaction(
+    signature: TransactionSignature
+  ): Promise<{
+    error: string | null;
+    slot: number;
+    computeUnitsUsed?: number;
+    timeMs: number;
+  }> {
+    const startTime = Date.now();
+    const timeout = this.options.confirmTimeoutMs;
+
+    return new Promise((resolve) => {
+      let resolved = false;
+      const timer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          resolve({
+            error: `Confirmation timed out after ${timeout}ms`,
+            slot: 0,
+            timeMs: Date.now() - startTime,
+          });
+        }
+      }, timeout);
+
+      this.connection
+        .confirmTransaction(
+          {
+            signature,
+            blockhash: "", // Will use the one from tx
+            lastValidBlockHeight: 0, // Will poll until timeout
+          },
+          this.options.commitment
+        )
+        .then((result) => {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timer);
+
+            if (result.value.err) {
+              resolve({
+                error: JSON.stringify(result.value.err),
+                slot: result.context.slot,
+                timeMs: Date.now() - startTime,
+              });
+            } else {
+              resolve({
+                error: null,
+                slot: result.context.slot,
+                timeMs: Date.now() - startTime,
+              });
+            }
+          }
+        })
+        .catch((err: unknown) => {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timer);
+            resolve({
+              error: err instanceof Error ? err.message : String(err),
+              slot: 0,
+              timeMs: Date.now() - startTime,
+            });
+          }
+        });
+    });
+  }
+
+  /**
+   * Check if an error is non-retryable.
+   */
+  private isNonRetryableError(error: string): boolean {
+    const nonRetryable = [
+      "Blockhash not found",
+      "insufficient funds",
+      "Account not found",
+      "invalid account data",
+      "Transaction simulation failed: Error processing Instruction",
+      "already been processed",
+      "Program failed to complete",
+    ];
+    return nonRetryable.some((msg) => error.includes(msg));
+  }
+
+  /**
+   * Calculate exponential backoff delay with jitter.
+   */
+  private calculateBackoff(attempt: number): number {
+    const base = this.options.baseRetryDelayMs;
+    const max = this.options.maxRetryDelayMs;
+    const exponential = Math.min(base * Math.pow(2, attempt), max);
+    // Add jitter: random value between 0 and exponential
+    const jitter = Math.random() * exponential * 0.5;
+    return Math.floor(exponential + jitter);
+  }
+
+  /**
+   * Sleep for a given number of milliseconds.
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Abort the current execution. In-flight transactions will
+   * complete, but no new transactions will be submitted.
+   */
+  abort(): void {
+    this.aborted = true;
+  }
+
+  /**
+   * Check if execution has been aborted.
+   */
+  get isAborted(): boolean {
+    return this.aborted;
+  }
+
+  /**
+   * Execute a batch of independent transactions in parallel (no lanes).
+   * Useful for simple cases where all transactions are independent.
+   */
+  async executeBatch(
+    nodes: TransactionNode[]
+  ): Promise<TransactionResult[]> {
+    const promises = nodes.map((node) => this.executeNode(node));
+    return Promise.all(promises);
+  }
+
+  /**
+   * Simulate all transactions in a plan without sending them.
+   * Returns simulation results for each node.
+   */
+  async simulatePlan(
+    plan: ExecutionPlan
+  ): Promise<
+    Map<string, { success: boolean; error?: string; unitsConsumed?: number }>
+  > {
+    const results = new Map<
+      string,
+      { success: boolean; error?: string; unitsConsumed?: number }
+    >();
+
+    for (const lane of plan.lanes) {
+      for (const node of lane.nodes) {
+        try {
+          const tx = await this.buildTransaction(node);
+          const signedTx = await this.wallet.signTransaction(tx);
+          const simResult = await this.connection.simulateTransaction(signedTx);
+
+          if (simResult.value.err) {
+            results.set(node.id, {
+              success: false,
+              error: JSON.stringify(simResult.value.err),
+              unitsConsumed: simResult.value.unitsConsumed ?? undefined,
+            });
+          } else {
+            results.set(node.id, {
+              success: true,
+              unitsConsumed: simResult.value.unitsConsumed ?? undefined,
+            });
+          }
+        } catch (err: unknown) {
+          results.set(node.id, {
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    return results;
+  }
+}
