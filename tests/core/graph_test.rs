@@ -361,3 +361,244 @@ fn test_successors_and_predecessors() {
         .add_edge(GraphEdge::new(0, 2, DependencyType::DataDependency))
         .unwrap();
     graph
+        .add_edge(GraphEdge::new(1, 3, DependencyType::DataDependency))
+        .unwrap();
+
+    let mut succs = graph.successors(0);
+    succs.sort();
+    assert_eq!(succs, vec![1, 2]);
+    assert_eq!(graph.predecessors(3), vec![1]);
+    assert_eq!(graph.in_degree(0), 0);
+    assert_eq!(graph.out_degree(0), 2);
+    assert_eq!(graph.in_degree(3), 1);
+}
+
+#[test]
+fn test_total_estimated_cu() {
+    let mut graph = TransactionGraph::new();
+    graph.insert_node(GraphNode::new(0, vec![]).with_estimated_cu(100));
+    graph.insert_node(GraphNode::new(1, vec![]).with_estimated_cu(250));
+    graph.insert_node(GraphNode::new(2, vec![]).with_estimated_cu(50));
+    assert_eq!(graph.total_estimated_cu(), 400);
+}
+
+// ---------------------------------------------------------------------------
+// GraphNode tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_graph_node_conflicts_with() {
+    let program = make_pubkey(0);
+    let shared = make_pubkey(1);
+
+    let ix_a = make_ix(program, &[], &[shared], "write_shared");
+    let ix_b = make_ix(program, &[shared], &[], "read_shared");
+
+    let node_a = GraphNode::new(0, vec![ix_a]);
+    let node_b = GraphNode::new(1, vec![ix_b]);
+    assert!(node_a.conflicts_with(&node_b));
+}
+
+#[test]
+fn test_graph_node_no_conflict_read_read() {
+    let program = make_pubkey(0);
+    let shared = make_pubkey(1);
+
+    let ix_a = make_ix(program, &[shared], &[], "read_a");
+    let ix_b = make_ix(program, &[shared], &[], "read_b");
+
+    let node_a = GraphNode::new(0, vec![ix_a]);
+    let node_b = GraphNode::new(1, vec![ix_b]);
+    assert!(!node_a.conflicts_with(&node_b));
+}
+
+#[test]
+fn test_graph_node_write_set_and_read_set() {
+    let program = make_pubkey(0);
+    let read_acct = make_pubkey(1);
+    let write_acct = make_pubkey(2);
+
+    let ix = make_ix(program, &[read_acct], &[write_acct], "mixed");
+    let node = GraphNode::new(0, vec![ix]);
+
+    assert!(node.write_set().contains(&write_acct));
+    assert!(node.read_set().contains(&read_acct));
+    assert!(!node.write_set().contains(&read_acct));
+}
+
+#[test]
+fn test_graph_node_program_ids() {
+    let prog_a = make_pubkey(10);
+    let prog_b = make_pubkey(20);
+    let ix_a = InstructionData::new(prog_a, vec![], vec![]);
+    let ix_b = InstructionData::new(prog_b, vec![], vec![]);
+
+    let node = GraphNode::new(0, vec![ix_a, ix_b]);
+    let ids = node.program_ids();
+    assert_eq!(ids.len(), 2);
+}
+
+#[test]
+fn test_graph_node_builder() {
+    let program = make_pubkey(0);
+    let ix = make_ix(program, &[], &[make_pubkey(1)], "test");
+    let node = GraphNodeBuilder::new(5)
+        .instruction(ix)
+        .priority(10)
+        .estimated_cu(42_000)
+        .label("my_node")
+        .build();
+
+    assert_eq!(node.id, 5);
+    assert_eq!(node.priority, 10);
+    assert_eq!(node.estimated_cu, 42_000);
+    assert_eq!(node.label.as_deref(), Some("my_node"));
+    assert_eq!(node.instructions.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// GraphEdge tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_edge_constructors() {
+    let e1 = GraphEdge::data_dependency(0, 1);
+    assert!(e1.is_data_dependency());
+    assert!(!e1.is_order_dependency());
+
+    let e2 = GraphEdge::order_dependency(1, 2);
+    assert!(e2.is_order_dependency());
+
+    let account = make_pubkey(1);
+    let e3 = GraphEdge::account_conflict(2, 3, vec![account]);
+    assert!(e3.is_account_conflict());
+    assert_eq!(e3.conflicting_accounts.len(), 1);
+}
+
+#[test]
+fn test_edge_with_weight() {
+    let edge = GraphEdge::new(0, 1, DependencyType::DataDependency).with_weight(5.0);
+    assert_eq!(edge.weight, 5.0);
+}
+
+#[test]
+fn test_edge_auto_detected_flag() {
+    let edge = GraphEdge::new(0, 1, DependencyType::AccountConflict).with_auto_detected(true);
+    assert!(edge.auto_detected);
+}
+
+// ---------------------------------------------------------------------------
+// GraphDecomposer tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_decomposer_single_instruction() {
+    let decomposer = GraphDecomposer::new();
+    let program = make_pubkey(0);
+    let ix = make_ix(program, &[], &[make_pubkey(1)], "w1");
+
+    let graph = decomposer.decompose(vec![ix]).unwrap();
+    assert_eq!(graph.node_count(), 1);
+    assert_eq!(graph.edge_count(), 0);
+}
+
+#[test]
+fn test_decomposer_independent_instructions() {
+    let decomposer = GraphDecomposer::new();
+    let program = make_pubkey(0);
+
+    let ix1 = make_ix(program, &[], &[make_pubkey(1)], "w1");
+    let ix2 = make_ix(program, &[], &[make_pubkey(2)], "w2");
+    let ix3 = make_ix(program, &[], &[make_pubkey(3)], "w3");
+
+    let graph = decomposer.decompose(vec![ix1, ix2, ix3]).unwrap();
+    // All independent -- should have no edges
+    assert_eq!(graph.edge_count(), 0);
+}
+
+#[test]
+fn test_decomposer_conflicting_write_write() {
+    let decomposer = GraphDecomposer::new();
+    let program = make_pubkey(0);
+    let shared = make_pubkey(1);
+
+    let ix1 = make_ix(program, &[], &[shared], "w_shared_1");
+    let ix2 = make_ix(program, &[], &[shared], "w_shared_2");
+
+    let graph = decomposer.decompose(vec![ix1, ix2]).unwrap();
+    // Conflicting on the same account -- must have an edge
+    assert!(graph.edge_count() >= 1);
+}
+
+#[test]
+fn test_decomposer_read_write_conflict() {
+    let decomposer = GraphDecomposer::new();
+    let program = make_pubkey(0);
+    let shared = make_pubkey(1);
+
+    let ix1 = make_ix(program, &[shared], &[], "read_shared");
+    let ix2 = make_ix(program, &[], &[shared], "write_shared");
+
+    let graph = decomposer.decompose(vec![ix1, ix2]).unwrap();
+    assert!(graph.edge_count() >= 1);
+}
+
+#[test]
+fn test_decomposer_mixed_parallel_and_sequential() {
+    let decomposer = GraphDecomposer::new();
+    let program = make_pubkey(0);
+
+    // ix0 writes A, ix1 writes B (parallel), ix2 reads A and B (depends on both)
+    let ix0 = make_ix(program, &[], &[make_pubkey(1)], "write_a");
+    let ix1 = make_ix(program, &[], &[make_pubkey(2)], "write_b");
+    let ix2 = make_ix(program, &[make_pubkey(1), make_pubkey(2)], &[], "read_ab");
+
+    let graph = decomposer.decompose(vec![ix0, ix1, ix2]).unwrap();
+
+    // ix2 depends on both ix0 and ix1; ix0 and ix1 are independent
+    assert!(!graph.has_cycle());
+    let topo = graph.topological_sort().unwrap();
+    assert_eq!(topo.len(), graph.node_count());
+}
+
+#[test]
+fn test_decomposer_max_instructions_per_node() {
+    let decomposer = GraphDecomposer::new().with_max_instructions_per_node(2);
+    let program = make_pubkey(0);
+
+    // 4 independent instructions should split into 2 nodes of 2
+    let ixs: Vec<InstructionData> = (1..=4)
+        .map(|i| make_ix(program, &[], &[make_pubkey(i as u8)], &format!("w{}", i)))
+        .collect();
+
+    let graph = decomposer.decompose(ixs).unwrap();
+    // With 4 independent instructions and max 2 per node, expect 2 nodes
+    assert!(graph.node_count() >= 2);
+}
+
+#[test]
+fn test_decomposer_decompose_multiple() {
+    let decomposer = GraphDecomposer::new();
+    let program = make_pubkey(0);
+
+    let set1 = vec![make_ix(program, &[], &[make_pubkey(1)], "a")];
+    let set2 = vec![make_ix(program, &[], &[make_pubkey(2)], "b")];
+
+    let graph = decomposer.decompose_multiple(vec![set1, set2]).unwrap();
+    assert!(graph.node_count() >= 2);
+    // Two independent sets should have no edges between them
+    assert_eq!(graph.edge_count(), 0);
+}
+
+#[test]
+fn test_decomposer_preserves_labels() {
+    let decomposer = GraphDecomposer::new();
+    let program = make_pubkey(0);
+    let ix = make_ix(program, &[], &[make_pubkey(1)], "my_label");
+
+    let graph = decomposer.decompose(vec![ix]).unwrap();
+    // The decomposer assigns level-based labels, and the original ix label is preserved in the ix
+    let node = graph.nodes.values().next().unwrap();
+    assert!(node.label.is_some());
+    assert_eq!(node.instructions[0].label.as_deref(), Some("my_label"));
+}
