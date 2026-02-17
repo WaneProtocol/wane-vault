@@ -542,4 +542,100 @@ mod tests {
 
         let node1 = GraphNode::new(0, vec![ix1]);
         let node2 = GraphNode::new(1, vec![ix2]);
-        let node3 = GraphNode::new(2, vec![ix3]);
+        let node3 = GraphNode::new(2, vec![ix3]);
+
+        let mut lane = ExecutionLane::new(0);
+        lane.add_node(&node1);
+
+        // node2 reads account 1, which node1 writes -> conflict.
+        assert!(!lane.can_add(&node2));
+
+        // node3 writes account 2, no overlap with lane -> can add.
+        assert!(lane.can_add(&node3));
+    }
+
+    #[test]
+    fn test_independent_subgraphs() {
+        use crate::graph::{GraphEdge, GraphNode, TransactionGraph};
+        use crate::types::DependencyType;
+
+        let mut graph = TransactionGraph::new();
+
+        // Two disconnected pairs: {0, 1} and {2, 3}
+        for i in 0..4 {
+            graph.insert_node(GraphNode::new(i, vec![]).with_estimated_cu(100));
+        }
+        graph
+            .add_edge(GraphEdge::new(0, 1, DependencyType::DataDependency))
+            .unwrap();
+        graph
+            .add_edge(GraphEdge::new(2, 3, DependencyType::DataDependency))
+            .unwrap();
+
+        let analyzer = ParallelismAnalyzer::new();
+        let result = analyzer.analyze(&graph).unwrap();
+
+        assert_eq!(result.independent_subgraphs.len(), 2);
+    }
+
+    #[test]
+    fn test_parallelism_ratio() {
+        use crate::graph::{GraphEdge, GraphNode, TransactionGraph};
+        use crate::types::DependencyType;
+
+        let mut graph = TransactionGraph::new();
+
+        // Two independent nodes with CU 100 each.
+        graph.insert_node(GraphNode::new(0, vec![]).with_estimated_cu(100));
+        graph.insert_node(GraphNode::new(1, vec![]).with_estimated_cu(100));
+
+        let analyzer = ParallelismAnalyzer::new();
+        let (seq, par, ratio) = analyzer.parallelism_ratio(&graph).unwrap();
+
+        assert_eq!(seq, 200.0);
+        assert_eq!(par, 100.0); // Both run in parallel, max CU in the single level = 100.
+        assert_eq!(ratio, 2.0);
+    }
+
+    #[test]
+    fn test_account_access_tracker() {
+        use crate::types::{AccountAccess, AccountAccessTracker};
+
+        let mut tracker = AccountAccessTracker::new();
+        let account = make_pubkey(1);
+
+        tracker.record(account, 0, AccountAccess::Write);
+        tracker.record(account, 1, AccountAccess::Read);
+        tracker.record(account, 2, AccountAccess::Read);
+
+        let conflicts = tracker.find_conflicts();
+        // Node 0 writes, nodes 1 and 2 read -> conflicts (0,1) and (0,2).
+        assert!(conflicts.len() >= 2);
+    }
+
+    #[test]
+    fn test_graph_roots_and_leaves() {
+        use crate::graph::{GraphEdge, GraphNode, TransactionGraph};
+        use crate::types::DependencyType;
+
+        let mut graph = TransactionGraph::new();
+        graph.insert_node(GraphNode::new(0, vec![]));
+        graph.insert_node(GraphNode::new(1, vec![]));
+        graph.insert_node(GraphNode::new(2, vec![]));
+
+        graph
+            .add_edge(GraphEdge::new(0, 1, DependencyType::OrderDependency))
+            .unwrap();
+        graph
+            .add_edge(GraphEdge::new(1, 2, DependencyType::OrderDependency))
+            .unwrap();
+
+        let mut roots = graph.root_nodes();
+        roots.sort();
+        assert_eq!(roots, vec![0]);
+
+        let mut leaves = graph.leaf_nodes();
+        leaves.sort();
+        assert_eq!(leaves, vec![2]);
+    }
+}
