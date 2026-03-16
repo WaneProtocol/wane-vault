@@ -1,0 +1,50 @@
+﻿{
+  "name": "@wane/vault-sdk",
+  "version": "0.3.0",
+  "description": "TypeScript SDK for the Wane screening vault: create, predict, execute screened sends, and withdraw on EVM via viem.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "clean": "rimraf dist"
+  },
+  "keywords": [
+    "wane",
+    "viem",
+    "evm",
+    "base",
+    "smart-wallet",
+    "screening",
+    "security"
+  ],
+  "homepage": "https://wane.network",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/WaneProtocol/wane-vault.git",
+    "directory": "sdk"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
