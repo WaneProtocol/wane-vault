@@ -245,7 +245,7 @@ fn compute_graph_id(nodes_data: &[u8], edges_data: &[u8]) -> [u8; 32] {
 /// Print a human-readable summary of the graph (dry-run mode).
 fn print_graph_summary(intent: &IntentInput, graph_id: &[u8; 32], lane_count: u8) {
     println!("========================================");
-    println!("  iVZA Graph Summary (dry-run)");
+    println!("  IVZA Graph Summary (dry-run)");
     println!("========================================");
     println!("Graph ID:   {}", bs58::encode(graph_id).into_string());
     println!("Nodes:      {}", intent.nodes.len());

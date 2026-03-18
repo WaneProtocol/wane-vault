@@ -1,5 +1,5 @@
 /**
- * Comprehensive tests for the iVZA SDK IntentParser, IntentValidator,
+ * Comprehensive tests for the IVZA SDK IntentParser, IntentValidator,
  * AccountLockManager, and serialization utilities.
  */
 

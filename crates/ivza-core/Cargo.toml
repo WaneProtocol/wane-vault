@@ -3,7 +3,7 @@ name = "ivza-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Core library for iVZA parallel transaction execution engine"
+description = "Core library for IVZA parallel transaction execution engine"
 
 [dependencies]
 solana-sdk = { workspace = true }

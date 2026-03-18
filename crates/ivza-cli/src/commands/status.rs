@@ -307,7 +307,7 @@ fn parse_execution_record(data: &[u8], expected_lane: u8) -> Result<LaneRecordDi
 /// Print a human-readable status display.
 fn print_status(display: &GraphStatusDisplay) {
     println!("========================================");
-    println!("  iVZA Graph Status");
+    println!("  IVZA Graph Status");
     println!("========================================");
     println!("Graph ID:     {}", display.graph_id);
     println!("Owner:        {}", display.owner);

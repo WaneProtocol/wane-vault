@@ -362,7 +362,7 @@ fn read_input(path: &str) -> Result<String> {
 fn print_analysis(result: &AnalysisResult) {
     let s = &result.summary;
     println!("========================================");
-    println!("  iVZA Graph Analysis");
+    println!("  IVZA Graph Analysis");
     println!("========================================");
     println!();
     println!("Graph Topology:");

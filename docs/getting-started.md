@@ -1,6 +1,6 @@
-# Getting Started with iVZA
+# Getting Started with IVZA
 
-This guide walks through installing iVZA, building the project, creating your first transaction graph, and running the CLI.
+This guide walks through installing IVZA, building the project, creating your first transaction graph, and running the CLI.
 
 ---
 
@@ -10,7 +10,7 @@ Install the following before proceeding:
 
 ### Rust
 
-Install Rust via rustup. iVZA requires Rust 1.75 or later.
+Install Rust via rustup. IVZA requires Rust 1.75 or later.
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -194,7 +194,7 @@ main().catch(console.error);
 
 ## Using the CLI
 
-The iVZA CLI provides a command-line interface for common operations.
+The IVZA CLI provides a command-line interface for common operations.
 
 ### Help
 

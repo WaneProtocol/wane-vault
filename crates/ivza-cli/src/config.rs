@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 /// Default RPC endpoint (Solana devnet).
 const DEFAULT_RPC_URL: &str = "https://api.devnet.solana.com";
 
-/// Default program ID for the iVZA engine.
-const DEFAULT_PROGRAM_ID: &str = "iVZAeng1neXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+/// Default program ID for the IVZA engine.
+const DEFAULT_PROGRAM_ID: &str = "IVZAeng1neXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
 
 /// Default keypair location relative to home.
 const DEFAULT_KEYPAIR_REL: &str = ".config/solana/id.json";
@@ -18,7 +18,7 @@ const CONFIG_DIR: &str = ".ivza";
 /// Configuration file name.
 const CONFIG_FILE: &str = "config.json";
 
-/// CLI configuration for connecting to the iVZA engine on Solana.
+/// CLI configuration for connecting to the IVZA engine on Solana.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CliConfig {
     /// Solana RPC endpoint URL.

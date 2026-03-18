@@ -1,4 +1,4 @@
-// === iVZA Parallel Execution Engine SDK ===
+// === IVZA Parallel Execution Engine SDK ===
 // Main entry point: re-exports all public API surface.
 
 // Client

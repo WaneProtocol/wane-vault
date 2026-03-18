@@ -76,7 +76,7 @@ pub fn handler(
     });
 
     msg!(
-        "iVZA Engine initialized: fee={}bps, max_nodes={}, max_lanes={}",
+        "IVZA Engine initialized: fee={}bps, max_nodes={}, max_lanes={}",
         fee_bps,
         max_nodes_per_graph,
         max_lanes

@@ -68,11 +68,7 @@ impl TransactionGraph {
     pub fn leaf_nodes(&self) -> Vec<NodeId> {
         self.nodes
             .keys()
-            .filter(|id| {
-                self.adjacency
-                    .get(id)
-                    .is_none_or(|succs| succs.is_empty())
-            })
+            .filter(|id| self.adjacency.get(id).is_none_or(|succs| succs.is_empty()))
             .copied()
             .collect()
     }

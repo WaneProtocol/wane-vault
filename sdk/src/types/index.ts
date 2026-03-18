@@ -22,7 +22,7 @@ export {
 } from "./transaction";
 
 /**
- * Intent types supported by the iVZA engine.
+ * Intent types supported by the IVZA engine.
  */
 export enum IntentType {
   Swap = "swap",
@@ -144,7 +144,7 @@ export interface SolverResult {
 }
 
 /**
- * Configuration for the iVZA client.
+ * Configuration for the IVZA client.
  */
 export interface IvzaConfig {
   rpcEndpoints: string[];

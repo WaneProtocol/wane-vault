@@ -59,7 +59,7 @@ pub async fn run(args: ConfigArgs, cfg: &CliConfig) -> Result<()> {
 /// Display the current configuration.
 fn show_config(cfg: &CliConfig) -> Result<()> {
     println!("========================================");
-    println!("  iVZA CLI Configuration");
+    println!("  IVZA CLI Configuration");
     println!("========================================");
     println!("RPC URL:        {}", cfg.rpc_url);
     println!("Keypair:        {}", cfg.keypair_path);

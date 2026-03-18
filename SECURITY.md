@@ -13,11 +13,11 @@ Only the latest release receives security updates. Users should always run the m
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in iVZA, please report it responsibly. Do NOT open a public GitHub issue for security vulnerabilities.
+If you discover a security vulnerability in IVZA, please report it responsibly. Do NOT open a public GitHub issue for security vulnerabilities.
 
 ### How to Report
 
-1. Send an email to the maintainers with the subject line: `[SECURITY] iVZA vulnerability report`.
+1. Send an email to the maintainers with the subject line: `[SECURITY] IVZA vulnerability report`.
 2. Include the following information:
    - Description of the vulnerability.
    - Steps to reproduce the issue.

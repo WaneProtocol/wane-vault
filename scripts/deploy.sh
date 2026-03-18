@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "========================================="
-echo "  iVZA Deploy Script"
+echo "  IVZA Deploy Script"
 echo "========================================="
 echo ""
 echo "  Cluster:  $CLUSTER"

@@ -91,7 +91,7 @@ interface TrackedGraph {
 }
 
 /**
- * Main entry point for the iVZA Parallel Execution Engine SDK.
+ * Main entry point for the IVZA Parallel Execution Engine SDK.
  *
  * Provides a unified interface for:
  *   - Parsing user intents (DSL or JSON)
@@ -574,7 +574,7 @@ export class IvzaClient {
   }
 
   /**
-   * Get the program ID for the iVZA on-chain program.
+   * Get the program ID for the IVZA on-chain program.
    */
   getProgramId(): PublicKey {
     return new PublicKey(this.config.programId);

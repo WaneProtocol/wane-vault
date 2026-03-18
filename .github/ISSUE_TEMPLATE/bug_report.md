@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in iVZA
+about: Report a bug in IVZA
 title: "[BUG] "
 labels: bug
 assignees: ""
@@ -31,7 +31,7 @@ What actually happened. Include error messages, logs, or stack traces.
 - **Rust version**: (output of `rustc --version`)
 - **Node.js version**: (output of `node --version`)
 - **Solana CLI version**: (output of `solana --version`)
-- **iVZA version/commit**: (e.g., v0.1.0 or commit hash)
+- **IVZA version/commit**: (e.g., v0.1.0 or commit hash)
 - **Solana cluster**: (e.g., mainnet-beta, devnet, localnet)
 
 ## Configuration

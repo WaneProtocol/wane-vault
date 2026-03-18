@@ -3,7 +3,7 @@ name = "ivza-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "On-chain program for iVZA parallel execution engine"
+description = "On-chain program for IVZA parallel execution engine"
 
 [lib]
 crate-type = ["cdylib", "lib"]

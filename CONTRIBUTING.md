@@ -1,6 +1,6 @@
-# Contributing to iVZA
+# Contributing to IVZA
 
-Thank you for your interest in contributing to iVZA. This document covers the development setup, code style guidelines, and the process for submitting changes.
+Thank you for your interest in contributing to IVZA. This document covers the development setup, code style guidelines, and the process for submitting changes.
 
 ---
 
@@ -121,4 +121,4 @@ Be respectful and constructive. Technical disagreements are welcome; personal at
 
 ## License
 
-By contributing to iVZA, you agree that your contributions will be licensed under the MIT License.
+By contributing to IVZA, you agree that your contributions will be licensed under the MIT License.

@@ -300,6 +300,7 @@ impl BranchAndBoundSolver {
     }
 
     /// Detect which swap requests share pool liquidity.
+    #[allow(dead_code)]
     fn find_shared_pools(
         &self,
         candidates: &HashMap<NodeId, Vec<Route>>,

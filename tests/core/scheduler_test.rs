@@ -556,7 +556,7 @@ fn test_engine_parallelism_summary() {
 
     // Test Display impl
     let display = format!("{}", summary);
-    assert!(display.contains("iVZA Parallelism Summary"));
+    assert!(display.contains("IVZA Parallelism Summary"));
 }
 
 #[test]

@@ -1,5 +1,5 @@
 /**
- * Comprehensive tests for the iVZA SDK TransactionGraph, GraphNode,
+ * Comprehensive tests for the IVZA SDK TransactionGraph, GraphNode,
  * TransactionGraphBuilder, topological sort, cycle detection,
  * independent groups, scheduling, and serialization.
  */

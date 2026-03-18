@@ -41,7 +41,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "========================================="
-echo "  iVZA Test Suite"
+echo "  IVZA Test Suite"
 echo "========================================="
 
 FAILED=0

@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-/// Custom error codes for the iVZA parallel execution engine.
+/// Custom error codes for the IVZA parallel execution engine.
 #[error_code]
 pub enum EngineError {
     /// 6000 - The submitted graph is structurally invalid.

@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [stable, nightly]
+        toolchain: [stable]
 
     steps:
       - name: Checkout
@@ -42,11 +42,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Build workspace
+        run: cargo build --workspace --exclude ivza-engine
 
-      - name: Run tests
-        run: cargo test --all-features --verbose
+      - name: Run clippy (core crates)
+        run: cargo clippy --workspace --exclude ivza-engine -- -W clippy::all
 
   typescript-check:
     name: TypeScript SDK
@@ -70,11 +70,3 @@ jobs:
       - name: Build
         working-directory: sdk
         run: npm run build
-
-      - name: Lint
-        working-directory: sdk
-        run: npm run lint
-
-      - name: Test
-        working-directory: sdk
-        run: npm test

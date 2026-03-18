@@ -554,7 +554,7 @@ fn build_solution(
     };
 
     // Build lane timelines.
-    let mut lane_timelines: Vec<LaneTimeline> = (0..lane_count)
+    let lane_timelines: Vec<LaneTimeline> = (0..lane_count)
         .map(|l| {
             let slots: Vec<TimeSlot> = final_schedule
                 .iter()
@@ -614,7 +614,7 @@ fn read_input(path: &str) -> Result<String> {
 /// Print the solution in human-readable format.
 fn print_solution(sol: &SolverSolution) {
     println!("========================================");
-    println!("  iVZA Solver Solution");
+    println!("  IVZA Solver Solution");
     println!("========================================");
     println!("Strategy:       {}", sol.strategy);
     println!("Converged:      {}", sol.converged);

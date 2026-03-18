@@ -1,12 +1,12 @@
-# iVZA Architecture
+# IVZA Architecture
 
-This document describes the internal architecture of the iVZA Parallel Execution Engine, covering the pipeline stages, data flow, algorithms, and design decisions.
+This document describes the internal architecture of the IVZA Parallel Execution Engine, covering the pipeline stages, data flow, algorithms, and design decisions.
 
 ---
 
 ## Overview
 
-iVZA transforms high-level transaction intents into optimized parallel execution plans for Solana. The system is structured as a five-stage pipeline where each stage performs a discrete transformation on the workload.
+IVZA transforms high-level transaction intents into optimized parallel execution plans for Solana. The system is structured as a five-stage pipeline where each stage performs a discrete transformation on the workload.
 
 ```mermaid
 flowchart TD
@@ -243,11 +243,11 @@ ExecutionResults (per-node signature + status)
 
 ### Why DAGs Over Transaction Batches
 
-Batching transactions is the simplest form of parallelism but ignores dependency structure. By modeling the workload as a DAG, iVZA can extract parallelism from complex multi-step operations where some steps are independent and others are not.
+Batching transactions is the simplest form of parallelism but ignores dependency structure. By modeling the workload as a DAG, IVZA can extract parallelism from complex multi-step operations where some steps are independent and others are not.
 
 ### Why Account-Level Conflict Detection
 
-Solana's runtime uses account-level locking. Two transactions that touch the same writable account cannot execute in the same slot without contention. By mirroring this model, iVZA's scheduler produces execution plans that align with Solana's native parallelism.
+Solana's runtime uses account-level locking. Two transactions that touch the same writable account cannot execute in the same slot without contention. By mirroring this model, IVZA's scheduler produces execution plans that align with Solana's native parallelism.
 
 ### Why Level-Based Scheduling
 

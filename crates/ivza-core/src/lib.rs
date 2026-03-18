@@ -1,4 +1,4 @@
-//! iVZA Core: Parallel Transaction Execution Engine for Solana
+//! IVZA Core: Parallel Transaction Execution Engine for Solana
 //!
 //! This crate provides the core library for decomposing, analyzing, and scheduling
 //! transaction graphs for maximum parallelism on Solana.
@@ -29,7 +29,7 @@ use intent::{Intent, IntentParser, IntentResolver};
 use scheduler::{ExecutionPlan, ExecutionPlanner};
 use types::InstructionData;
 
-/// The main engine that ties together all stages of the iVZA pipeline:
+/// The main engine that ties together all stages of the IVZA pipeline:
 /// decompose -> analyze -> schedule.
 pub struct IvzaEngine {
     /// Decomposes instructions into a DAG.
@@ -208,7 +208,7 @@ pub struct ParallelismSummary {
 
 impl std::fmt::Display for ParallelismSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "=== iVZA Parallelism Summary ===")?;
+        writeln!(f, "=== IVZA Parallelism Summary ===")?;
         writeln!(
             f,
             "Nodes: {}, Edges: {}",

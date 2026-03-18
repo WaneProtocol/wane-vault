@@ -196,7 +196,7 @@ impl ParallelismAnalyzer {
         let mut parent: Vec<usize> = (0..node_ids.len()).collect();
         let mut rank: Vec<usize> = vec![0; node_ids.len()];
 
-        fn find(parent: &mut Vec<usize>, x: usize) -> usize {
+        fn find(parent: &mut [usize], x: usize) -> usize {
             if parent[x] != x {
                 parent[x] = find(parent, parent[x]);
             }
