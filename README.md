@@ -10,7 +10,7 @@
 
 # IVZA
 
-Parallel execution engine for Solana. Decomposes transaction intents into dependency graphs and schedules them across parallel execution lanes for maximum throughput on Sealevel.
+Execution layer for Solana. Decomposes transaction intents into dependency graphs and schedules them for optimal parallel execution on Sealevel.
 
 ## Architecture
 

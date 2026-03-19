@@ -91,7 +91,7 @@ interface TrackedGraph {
 }
 
 /**
- * Main entry point for the IVZA Parallel Execution Engine SDK.
+ * Main entry point for the IVZA Execution Layer SDK.
  *
  * Provides a unified interface for:
  *   - Parsing user intents (DSL or JSON)

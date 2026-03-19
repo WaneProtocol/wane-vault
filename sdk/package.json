@@ -1,10 +1,20 @@
 {
-  "name": "@ivza/sdk",
-  "version": "0.1.0",
+  "name": "ivza-sdk",
+  "version": "0.1.1",
   "description": "TypeScript SDK for IVZA Parallel Execution Engine on Solana",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist"],
+  "files": ["dist", "README.md"],
+  "keywords": ["solana", "parallel-execution", "transaction", "sealevel", "jito", "defi", "ivza"],
+  "homepage": "https://ivza.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ivzadotdev/ivza"
+  },
+  "author": "ivzadotdev",
+  "bugs": {
+    "url": "https://github.com/ivzadotdev/ivza/issues"
+  },
   "scripts": {
     "build": "tsc",
     "test": "vitest run",

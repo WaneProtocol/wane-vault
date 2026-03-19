@@ -7,7 +7,7 @@ mod config;
 
 use commands::{AnalyzeArgs, ConfigArgs, SolveArgs, StatusArgs, SubmitArgs};
 
-/// IVZA Parallel Execution Engine CLI
+/// IVZA Execution Layer CLI
 ///
 /// Submit, monitor, and analyze transaction graphs for parallel execution
 /// on the Solana blockchain.

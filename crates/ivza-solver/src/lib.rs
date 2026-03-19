@@ -1,4 +1,4 @@
-//! IVZA Solver: Route finding, optimization, and solving for the IVZA parallel execution engine.
+//! IVZA Solver: Route finding, optimization, and solving for the IVZA execution layer.
 //!
 //! This crate provides the solver layer that sits on top of `ivza-core`'s execution planning.
 //! It handles:

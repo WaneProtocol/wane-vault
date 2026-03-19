@@ -1,6 +1,6 @@
 # IVZA Architecture
 
-This document describes the internal architecture of the IVZA Parallel Execution Engine, covering the pipeline stages, data flow, algorithms, and design decisions.
+This document describes the internal architecture of the IVZA Execution Layer, covering the pipeline stages, data flow, algorithms, and design decisions.
 
 ---
 

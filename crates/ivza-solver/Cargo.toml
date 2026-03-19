@@ -3,7 +3,7 @@ name = "ivza-solver"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Solver and route optimizer for IVZA parallel execution engine"
+description = "Solver and route optimizer for IVZA execution layer"
 
 [dependencies]
 ivza-core = { workspace = true }
