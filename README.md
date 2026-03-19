@@ -1,10 +1,12 @@
 ![IVZA Banner](assets/banner.png)
 
-![License](https://img.shields.io/badge/license-MIT-020204?style=flat-square&labelColor=020204&color=00ddb5)
-![Rust](https://img.shields.io/badge/rust-1.75%2B-020204?style=flat-square&labelColor=020204&color=00ddb5)
-![Solana](https://img.shields.io/badge/solana-1.18-020204?style=flat-square&labelColor=020204&color=00b4d8)
-![TypeScript](https://img.shields.io/badge/typescript-5.x-020204?style=flat-square&labelColor=020204&color=00ddb5)
-![Open Source](https://img.shields.io/badge/open%20source-MIT-020204?style=flat-square&labelColor=020204&color=00b4d8)
+[![Website](https://img.shields.io/badge/website-ivza.dev-020204?style=flat-square&labelColor=020204&color=00ddb5)](https://ivza.dev)
+[![Docs](https://img.shields.io/badge/docs-ivza.dev%2Fdocs-020204?style=flat-square&labelColor=020204&color=00ddb5)](https://ivza.dev/docs)
+[![Blog](https://img.shields.io/badge/blog-ivza.dev%2Fblog-020204?style=flat-square&labelColor=020204&color=00b4d8)](https://ivza.dev/blog)
+[![X](https://img.shields.io/badge/X-@ivzadotdev-020204?style=flat-square&labelColor=020204&color=00b4d8)](https://x.com/ivzadotdev)
+[![License](https://img.shields.io/badge/license-MIT-020204?style=flat-square&labelColor=020204&color=00ddb5)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.75%2B-020204?style=flat-square&labelColor=020204&color=00ddb5)](https://www.rust-lang.org)
+[![Solana](https://img.shields.io/badge/solana-1.18-020204?style=flat-square&labelColor=020204&color=00b4d8)](https://solana.com)
 
 # IVZA
 

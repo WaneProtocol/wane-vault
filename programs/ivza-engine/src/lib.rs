@@ -7,7 +7,7 @@ pub mod state;
 
 use instructions::*;
 
-declare_id!("IVZAeng1neXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
+declare_id!("DiiCy7G6p5QVvGcAWfwA6m5EjyPeD5BRnEit9ersPUq2");
 
 #[program]
 pub mod ivza_engine {
