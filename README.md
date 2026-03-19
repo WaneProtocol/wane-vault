@@ -12,6 +12,8 @@
 
 Execution layer for Solana. Decomposes transaction intents into dependency graphs and schedules them for optimal parallel execution on Sealevel.
 
+CA: DTannMyRsBicMNJi7XwMLdqMH2G1GDWZshKiRE55pump
+
 ## Architecture
 
 ```mermaid
