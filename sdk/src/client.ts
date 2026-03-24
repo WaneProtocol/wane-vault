@@ -32,3 +32,22 @@ export class WaneVaultClient {
   readonly publicClient: PublicClient;
   readonly walletClient?: WalletClient;
   readonly factory: Address;
+
+  constructor(config: WaneVaultClientConfig) {
+    this.publicClient = config.publicClient;
+    this.walletClient = config.walletClient;
+    this.factory = getAddress(config.factory ?? ADDRESSES.vaultFactory);
+  }
+
+  private requireWallet(): WalletClient {
+    if (!this.walletClient) {
+      throw new Error("walletClient is required for state-changing calls");
+    }
+    return this.walletClient;
+  }
+
+  private requireAccount(wallet: WalletClient): Address {
+    const account = wallet.account?.address;
+    if (!account) throw new Error("walletClient has no account");
+    return account;
+  }
