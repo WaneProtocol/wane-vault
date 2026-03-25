@@ -89,3 +89,17 @@ export class WaneVaultClient {
     });
     return wallet.writeContract(request);
   }
+
+  /// Create a vault for `owner` (owner still solely controls it).
+  async createVaultFor(owner: Address): Promise<Hash> {
+    const wallet = this.requireWallet();
+    const account = this.requireAccount(wallet);
+    const { request } = await this.publicClient.simulateContract({
+      address: this.factory,
+      abi: factoryAbi,
+      functionName: "createVaultFor",
+      args: [getAddress(owner)],
+      account,
+    });
+    return wallet.writeContract(request);
+  }
