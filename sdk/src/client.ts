@@ -103,3 +103,30 @@ export class WaneVaultClient {
     });
     return wallet.writeContract(request);
   }
+
+  /* screened outbound actions */
+
+  /// Screen + run one raw action from the vault. The vault reverts with
+  /// Blocked(target, reason) before any value moves if the policy flags it.
+  async execute(
+    vault: Address,
+    target: Address,
+    value: bigint,
+    data: Hex = "0x",
+  ): Promise<Hash> {
+    const wallet = this.requireWallet();
+    const account = this.requireAccount(wallet);
+    const { request } = await this.publicClient.simulateContract({
+      address: getAddress(vault),
+      abi: vaultAbi,
+      functionName: "execute",
+      args: [getAddress(target), value, data],
+      account,
+    });
+    return wallet.writeContract(request);
+  }
+
+  /// Send native ETH from the vault to `to`, screened.
+  async send(vault: Address, to: Address, value: bigint): Promise<Hash> {
+    return this.execute(vault, to, value, "0x");
+  }
