@@ -130,3 +130,39 @@ export class WaneVaultClient {
   async send(vault: Address, to: Address, value: bigint): Promise<Hash> {
     return this.execute(vault, to, value, "0x");
   }
+
+  /// Send an ERC-20 from the vault to `to`, screened. The real recipient is
+  /// decoded on-chain from the transfer calldata, so a flagged recipient is
+  /// blocked even though the call target is the token contract.
+  async sendToken(
+    vault: Address,
+    token: Address,
+    to: Address,
+    amount: bigint,
+  ): Promise<Hash> {
+    const data = encodeFunctionData({
+      abi: erc20Abi,
+      functionName: "transfer",
+      args: [getAddress(to), amount],
+    });
+    return this.execute(vault, getAddress(token), 0n, data);
+  }
+
+  /// Screen + run a batch. Any flagged action reverts the whole batch.
+  async executeBatch(
+    vault: Address,
+    targets: Address[],
+    values: bigint[],
+    datas: Hex[],
+  ): Promise<Hash> {
+    const wallet = this.requireWallet();
+    const account = this.requireAccount(wallet);
+    const { request } = await this.publicClient.simulateContract({
+      address: getAddress(vault),
+      abi: vaultAbi,
+      functionName: "executeBatch",
+      args: [targets.map(getAddress), values, datas],
+      account,
+    });
+    return wallet.writeContract(request);
+  }
