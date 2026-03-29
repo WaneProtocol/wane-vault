@@ -166,3 +166,18 @@ export class WaneVaultClient {
     });
     return wallet.writeContract(request);
   }
+
+  /* owner withdraw (returns funds to the owner, unscreened) */
+
+  async withdrawETH(vault: Address, amount: bigint): Promise<Hash> {
+    const wallet = this.requireWallet();
+    const account = this.requireAccount(wallet);
+    const { request } = await this.publicClient.simulateContract({
+      address: getAddress(vault),
+      abi: vaultAbi,
+      functionName: "withdrawETH",
+      args: [amount],
+      account,
+    });
+    return wallet.writeContract(request);
+  }
