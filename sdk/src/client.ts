@@ -181,3 +181,39 @@ export class WaneVaultClient {
     });
     return wallet.writeContract(request);
   }
+
+  async withdrawToken(
+    vault: Address,
+    token: Address,
+    amount: bigint,
+  ): Promise<Hash> {
+    const wallet = this.requireWallet();
+    const account = this.requireAccount(wallet);
+    const { request } = await this.publicClient.simulateContract({
+      address: getAddress(vault),
+      abi: vaultAbi,
+      functionName: "withdrawToken",
+      args: [getAddress(token), amount],
+      account,
+    });
+    return wallet.writeContract(request);
+  }
+
+  /* views */
+
+  /// Dry-run the screen without executing. Free. Returns the decision plus a
+  /// human-readable label for the reason code.
+  async wouldAllow(
+    vault: Address,
+    target: Address,
+    value: bigint,
+    data: Hex = "0x",
+  ): Promise<ScreenResult> {
+    const [allowed, reason] = await this.publicClient.readContract({
+      address: getAddress(vault),
+      abi: vaultAbi,
+      functionName: "wouldAllow",
+      args: [getAddress(target), value, data],
+    });
+    return { allowed, reason, label: reasonLabel(reason) };
+  }
