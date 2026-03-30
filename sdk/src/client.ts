@@ -217,3 +217,19 @@ export class WaneVaultClient {
     });
     return { allowed, reason, label: reasonLabel(reason) };
   }
+
+  /// Dry-run an ERC-20 send (recipient decoded from calldata on-chain).
+  async wouldAllowToken(
+    vault: Address,
+    token: Address,
+    to: Address,
+    amount: bigint,
+  ): Promise<ScreenResult> {
+    const data = encodeFunctionData({
+      abi: erc20Abi,
+      functionName: "transfer",
+      args: [getAddress(to), amount],
+    });
+    return this.wouldAllow(vault, getAddress(token), 0n, data);
+  }
+}
