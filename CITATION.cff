@@ -1,0 +1,17 @@
+﻿cff-version: 1.2.0
+title: Wane Vault
+abstract: A non-custodial screening smart wallet on EVM. Funds live in the vault, every outbound action is screened against the owner policy before value moves, and the contract can only block, never divert.
+type: software
+license: MIT
+url: https://github.com/WaneProtocol/wane-vault
+repository-code: https://github.com/WaneProtocol/wane-vault
+authors:
+  - name: Wane Network
+    email: security@wane.network
+keywords:
+  - ethereum
+  - base
+  - foundry
+  - smart-wallet
+  - security
+  - screening
