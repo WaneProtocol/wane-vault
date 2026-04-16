@@ -31,3 +31,32 @@ You need:
 - [Foundry](https://book.getfoundry.sh) (forge, cast)
 - Solidity 0.8.27 (pinned in `foundry.toml`)
 - Node.js 20+ for the SDK and examples
+
+## Before submitting
+
+1. `forge fmt` and `forge test` pass locally.
+2. `cd sdk && npm run lint && npm run build` pass.
+3. Update `CHANGELOG.md` under `## [Unreleased]`.
+4. If you touched the vault or factory ABI, update `sdk/src/abi.ts` to match.
+
+## Reporting bugs
+
+Open an issue with the Bug Report template. On-chain reproductions are worth
+their weight: include the transaction hash, expected vs actual behavior, and
+the commit hash you tested against.
+
+## Proposing features
+
+Open a Feature Request issue first. Changes to the screening contract surface
+need discussion before code lands, since the vault holds user funds.
+
+## Security
+
+If you find a vulnerability, follow the disclosure path in
+[`SECURITY.md`](./SECURITY.md). Do not open a public issue.
+
+## Code of conduct
+
+This project follows the
+[Contributor Covenant 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/).
+See [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md).
