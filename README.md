@@ -1,0 +1,33 @@
+# Wane Vault
+
+<p align="center">
+  <a href="https://github.com/WaneProtocol/wane-vault/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-1f2937?style=for-the-badge&labelColor=0a0a0a" alt="license" /></a>
+  <a href="https://github.com/WaneProtocol/wane-vault/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/WaneProtocol/wane-vault/ci.yml?style=for-the-badge&labelColor=0a0a0a&color=4f7799" alt="ci" /></a>
+  <a href="https://github.com/WaneProtocol/wane-vault/commits/main"><img src="https://img.shields.io/github/last-commit/WaneProtocol/wane-vault?style=for-the-badge&labelColor=0a0a0a&color=7aa874" alt="last commit" /></a>
+  <a href="https://github.com/WaneProtocol/wane-vault/stargazers"><img src="https://img.shields.io/github/stars/WaneProtocol/wane-vault?style=for-the-badge&labelColor=0a0a0a&color=7aa874" alt="stars" /></a>
+</p>
+
+<p align="center">
+  <a href="https://wane.network"><img src="https://img.shields.io/badge/website-wane.network-4f7799?style=for-the-badge&labelColor=0a0a0a" alt="website" /></a>
+  <a href="https://x.com/wanedotnetwork"><img src="https://img.shields.io/badge/follow-%40wanedotnetwork-7aa874?style=for-the-badge&labelColor=0a0a0a" alt="x" /></a>
+  <a href="https://basescan.org/address/0x6640dd13F172c356f671d35ef76695792908e2a9"><img src="https://img.shields.io/badge/factory-live%20on%20base-d8a657?style=for-the-badge&labelColor=0a0a0a" alt="deployment" /></a>
+  <a href="https://book.getfoundry.sh"><img src="https://img.shields.io/badge/built%20with-foundry-d8a657?style=for-the-badge&labelColor=0a0a0a" alt="foundry" /></a>
+</p>
+
+**WaneVault** is a non-custodial screening smart wallet on EVM. Funds (ETH and ERC-20) live inside the vault. Only the owner drives it, and every outbound action routed through `execute()` is screened against the owner's `WanePolicy` (plus the shared antibody registry the policy reads) before any value moves. A flagged target reverts before the transfer. The contract can only block, never divert: the sole exits are `execute()` (screened) and `withdraw()` (owner-only, back to the owner), so deposits are never trapped.
+
+This is the EVM counterpart of the Solana Wane session vault. It is stronger than a 7702 delegate guard: a 7702 guard only runs when the wallet routes a call through `execute()`, so a raw key-signed transaction bypasses it. Funds held in this vault have no such bypass.
+
+## Features
+
+| Feature | Status |
+|---|---|
+| Vault: ETH + ERC-20 held in contract, owner-driven | stable |
+| Screen every outbound action against owner WanePolicy | stable |
+| Decode + screen the REAL ERC-20 recipient from calldata | stable |
+| Batch execute, atomic revert on any flagged action | stable |
+| Owner withdraw (funds never trapped) | stable |
+| `wouldAllow` free dry-run of the screen | stable |
+| CREATE2 factory: predict + create per-owner vault | stable |
+| TypeScript SDK (`@wane/vault-sdk`, viem) | stable |
+| Base mainnet factory deploy | live |
