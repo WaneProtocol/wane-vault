@@ -31,3 +31,19 @@ This is the EVM counterpart of the Solana Wane session vault. It is stronger tha
 | CREATE2 factory: predict + create per-owner vault | stable |
 | TypeScript SDK (`@wane/vault-sdk`, viem) | stable |
 | Base mainnet factory deploy | live |
+
+## Architecture
+
+```mermaid
+flowchart LR
+  O[owner EOA<br/>sole driver] -->|execute target,value,data| V[WaneVault<br/>ETH + ERC-20 held in contract]
+  V -->|evaluate / evaluateCall view| P[WanePolicy<br/>per-owner scope]
+  P -->|check view| R[WaneRegistry<br/>antibodies]
+  V -->|allowed: low-level call, value moves| T[target / recipient]
+  V -. blocked: revert Blocked target,reason .-> T
+  V -->|decode ERC-20 recipient from calldata, screen too| P
+```
+
+The factory deploys one `WaneVault` per owner at a deterministic CREATE2 address, so a client can compute and fund the vault before it exists. See [`docs/architecture.md`](./docs/architecture.md) for the full data flow and [`docs/threat-model.md`](./docs/threat-model.md) for the guarantees.
+
+## Build
