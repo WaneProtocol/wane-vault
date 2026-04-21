@@ -47,3 +47,26 @@ flowchart LR
 The factory deploys one `WaneVault` per owner at a deterministic CREATE2 address, so a client can compute and fund the vault before it exists. See [`docs/architecture.md`](./docs/architecture.md) for the full data flow and [`docs/threat-model.md`](./docs/threat-model.md) for the guarantees.
 
 ## Build
+
+```bash
+# 1. clone with submodules (forge-std + openzeppelin-contracts are pinned)
+git clone --recurse-submodules https://github.com/WaneProtocol/wane-vault
+cd wane-vault
+
+# if you cloned without --recurse-submodules:
+git submodule update --init --recursive
+
+# 2. build + test the contracts
+forge build
+forge test
+
+# 3. TypeScript SDK
+cd sdk && npm install && npm run build && cd ..
+```
+
+Required tooling:
+- [Foundry](https://book.getfoundry.sh) (forge, cast) on a recent nightly
+- Solidity 0.8.27 (pinned in `foundry.toml`, no auto-detect)
+- Node.js 20+ for the SDK and examples
+
+## Quick start
