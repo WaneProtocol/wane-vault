@@ -70,3 +70,30 @@ Required tooling:
 - Node.js 20+ for the SDK and examples
 
 ## Quick start
+
+Create a vault, fund it, then send through the screen with the SDK:
+
+```ts
+import { createPublicClient, createWalletClient, http, parseEther } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { base } from "viem/chains";
+import { WaneVaultClient } from "@wane/vault-sdk";
+
+const account = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
+const publicClient = createPublicClient({ chain: base, transport: http() });
+const walletClient = createWalletClient({ account, chain: base, transport: http() });
+
+const wane = new WaneVaultClient({ publicClient, walletClient });
+
+// 1. compute the vault address before it exists, then create it
+const vault = await wane.predictVault(account.address);   // 0x... deterministic CREATE2 address
+await wane.createVault();                                  // 0x<txhash>, deploys at `vault`
+
+// (fund `vault` with ETH / ERC-20 by sending to that address)
+
+// 2. send ETH through the screen; a flagged recipient reverts before value moves
+await wane.send(vault, "0xRecipient...", parseEther("0.1")); // 0x<txhash> on allow, revert Blocked on flag
+
+// 3. free dry-run, no gas
+const check = await wane.wouldAllow(vault, "0xRecipient...", parseEther("0.1"));
+// { allowed: true, reason: 0, label: "ok" }  |  { allowed: false, reason: 2, label: "antibody match" }
