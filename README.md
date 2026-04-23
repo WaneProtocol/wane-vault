@@ -97,3 +97,25 @@ await wane.send(vault, "0xRecipient...", parseEther("0.1")); // 0x<txhash> on al
 // 3. free dry-run, no gas
 const check = await wane.wouldAllow(vault, "0xRecipient...", parseEther("0.1"));
 // { allowed: true, reason: 0, label: "ok" }  |  { allowed: false, reason: 2, label: "antibody match" }
+
+// 4. withdraw back to the owner (unscreened, funds never trapped)
+await wane.withdrawETH(vault, parseEther("0.05"));         // 0x<txhash>
+```
+
+Send an ERC-20 (the real recipient is decoded and screened on-chain):
+
+```ts
+// a transfer to a flagged address reverts even though the call target is the token
+await wane.sendToken(vault, "0xToken...", "0xRecipient...", 100_000000n); // 0x<txhash> | revert Blocked
+```
+
+Drive the vault directly from cast:
+
+```bash
+# predict + create
+cast call   0x6640dd13F172c356f671d35ef76695792908e2a9 "predict(address)(address)" $OWNER --rpc-url base
+cast send   0x6640dd13F172c356f671d35ef76695792908e2a9 "createVault()(address)" --rpc-url base --private-key $PK
+
+# screened send from the vault
+cast send   $VAULT "execute(address,uint256,bytes)" $TO 100000000000000000 0x --rpc-url base --private-key $PK
+```
