@@ -119,3 +119,38 @@ cast send   0x6640dd13F172c356f671d35ef76695792908e2a9 "createVault()(address)" 
 # screened send from the vault
 cast send   $VAULT "execute(address,uint256,bytes)" $TO 100000000000000000 0x --rpc-url base --private-key $PK
 ```
+
+## Deployments
+
+These are real and verifiable on-chain. The factory mints per-owner vaults that reuse the already-live policy and antibody registry, so no new economy or genesis is involved.
+
+| Contract | Address | Explorer |
+|---|---|---|
+| WaneVaultFactory | `0x6640dd13F172c356f671d35ef76695792908e2a9` | [BaseScan](https://basescan.org/address/0x6640dd13F172c356f671d35ef76695792908e2a9) |
+| WanePolicy (reused) | `0x26deE4503C7f67356837ED41cE285026EF256667` | [BaseScan](https://basescan.org/address/0x26deE4503C7f67356837ED41cE285026EF256667) |
+| WaneRegistry (reused) | `0x027F371fB139A57EcD2A2E175d30157eEA1C56de` | [BaseScan](https://basescan.org/address/0x027F371fB139A57EcD2A2E175d30157eEA1C56de) |
+
+Network: Base mainnet (chain `8453`).
+
+## Project structure
+
+```
+wane-vault/
+├── foundry.toml                 src/test/script, solc 0.8.27, via_ir, cancun
+├── remappings.txt               forge-std/ and @openzeppelin/
+├── .gitmodules                  pinned forge-std + openzeppelin-contracts
+├── src/
+│   ├── WaneVault.sol            held funds, owner-driven, screened execute()
+│   ├── WaneVaultFactory.sol     CREATE2 per-owner factory (predict / create)
+│   ├── IWanePolicy.sol          the policy view surface the vault calls
+│   ├── WanePolicy.sol           per-owner protection scope + reason codes
+│   ├── WaneRegistry.sol         antibody registry the policy reads
+│   ├── WaneToken.sol            $WANE (stake / reward currency)
+│   └── WaneTypes.sol            shared threat / antibody types
+├── test/WaneVault.t.sol         clean pass, ETH + ERC-20 drainer block, withdraw, onlyOwner, batch, predict
+├── script/DeployVaultFactory.s.sol  deploy wired to the live policy
+├── sdk/                         TypeScript SDK (@wane/vault-sdk, viem)
+├── examples/                    create-and-send, screened-token-send
+├── docs/                        architecture, threat-model, sdk
+└── lib/                         submodules (gitignored, pinned via .gitmodules)
+```
