@@ -154,3 +154,20 @@ wane-vault/
 ├── docs/                        architecture, threat-model, sdk
 └── lib/                         submodules (gitignored, pinned via .gitmodules)
 ```
+
+## Contributing
+
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the contribution guide and
+[`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) for community standards. Security
+disclosures go through [`SECURITY.md`](./SECURITY.md).
+
+## License
+
+MIT. See [`LICENSE`](./LICENSE).
+
+## Links
+
+- Website: <https://wane.network>
+- X: <https://x.com/wanedotnetwork> (raw handle: `@wanedotnetwork`)
+- GitHub: <https://github.com/WaneProtocol/wane-vault>
+- Issues: <https://github.com/WaneProtocol/wane-vault/issues>
