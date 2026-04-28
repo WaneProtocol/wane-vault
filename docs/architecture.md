@@ -33,3 +33,18 @@ document walks the data flow and the contract surfaces.
 3. If either screen returns not-allowed, `execute()` reverts with
    `Blocked(flagged, reason)` before any value moves.
 4. If allowed, the vault performs the low-level call and forwards `value`.
+
+```
+execute(target, value, data)
+        |
+        v
+   _screen ----> _evaluate
+                    |  evaluateCall / evaluate (target)
+                    |  evaluate (decoded ERC-20 recipient, amount = 0)
+                    v
+            allowed? --- no ---> revert Blocked(flagged, reason)
+                    |
+                   yes
+                    v
+            target.call{value}(data)
+```
