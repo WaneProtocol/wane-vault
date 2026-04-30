@@ -48,3 +48,28 @@ execute(target, value, data)
                     v
             target.call{value}(data)
 ```
+
+## Why funds are never trapped
+
+The vault has exactly two exit paths:
+
+- `execute()` / `executeBatch()`: screened, can go anywhere the policy allows.
+- `withdrawETH()` / `withdrawToken()`: owner-only, can only go back to the owner.
+
+The contract never has a code path that sends funds to an address it chooses, so
+it can block but never divert. If the policy were ever misconfigured to block a
+legitimate destination, the owner can still withdraw and route funds manually.
+
+## Determinism
+
+`predict(owner)` reproduces the CREATE2 derivation:
+
+```
+salt     = bytes32(uint256(uint160(owner)))
+initHash = keccak256(creationCode ++ abi.encode(owner, policy))
+address  = keccak256(0xff ++ factory ++ salt ++ initHash)[12:]
+```
+
+The salt is the owner address, so each owner gets exactly one vault and the
+address is stable across chains where the factory is deployed at the same
+address.
