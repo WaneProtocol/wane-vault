@@ -48,3 +48,28 @@ with `BatchLengthMismatch` if the arrays differ in length.
 function withdrawETH(uint256 amount) external onlyOwner
 function withdrawToken(address token, uint256 amount) external onlyOwner
 ```
+
+Return funds to the owner. Unscreened by design: returning your own funds to
+yourself is always safe, and this is the escape hatch if a policy is
+misconfigured. Emits `Withdrawn`.
+
+### wouldAllow
+
+```solidity
+function wouldAllow(address target, uint256 value, bytes calldata data)
+    external view returns (bool allowed, uint8 reason)
+```
+
+Free dry-run of the screen. Mirrors enforcement exactly, including the decoded
+ERC-20 recipient check.
+
+### receive
+
+```solidity
+receive() external payable
+```
+
+Accepts inbound ETH. Deposits are plain transfers to the vault address. Only
+outbound actions are screened, so inbound value always lands.
+
+### Errors and events
