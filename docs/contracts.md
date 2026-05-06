@@ -73,3 +73,29 @@ Accepts inbound ETH. Deposits are plain transfers to the vault address. Only
 outbound actions are screened, so inbound value always lands.
 
 ### Errors and events
+
+```solidity
+error NotOwner();
+error Blocked(address target, uint8 reason);
+error CallFailed();
+error BatchLengthMismatch();
+
+event Screened(address indexed target, uint256 value, bool allowed, uint8 reason);
+event Executed(address indexed target, uint256 value, bytes4 selector);
+event Withdrawn(address indexed token, uint256 amount);
+```
+
+## WaneVaultFactory
+
+Deploys one `WaneVault` per owner at a deterministic CREATE2 address.
+
+### createVault / createVaultFor
+
+```solidity
+function createVault() external returns (address vault)
+function createVaultFor(address owner) external returns (address vault)
+```
+
+Deploy the caller's vault, or a vault for a named owner. Reverts with
+`VaultExists` if the owner already has one. Records `vaultOf[owner]` and emits
+`VaultCreated(owner, vault)`.
