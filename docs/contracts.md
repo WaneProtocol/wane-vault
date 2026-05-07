@@ -99,3 +99,28 @@ function createVaultFor(address owner) external returns (address vault)
 Deploy the caller's vault, or a vault for a named owner. Reverts with
 `VaultExists` if the owner already has one. Records `vaultOf[owner]` and emits
 `VaultCreated(owner, vault)`.
+
+### predict
+
+```solidity
+function predict(address owner) external view returns (address)
+```
+
+The deterministic vault address for `owner`, whether or not it exists yet. The
+salt is the owner address, so each owner maps to exactly one vault and the
+address is stable across chains where the factory is deployed at the same
+address.
+
+## Policy surface the vault reads
+
+```solidity
+function evaluate(address agent, address target, uint128 amount)
+    external view returns (bool allowed, uint8 reason);
+function evaluateCall(address agent, address target, bytes4 selector, uint128 amount)
+    external view returns (bool allowed, uint8 reason);
+```
+
+Both are pure `view`. The vault calls `evaluateCall` when the calldata carries a
+4-byte selector, otherwise `evaluate`. For ERC-20 movements it additionally calls
+`evaluate` on the decoded recipient with amount `0`. Reason codes are documented
+in [`reason-codes.md`](./reason-codes.md).
