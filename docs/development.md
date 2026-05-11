@@ -25,3 +25,28 @@ git submodule update --init --recursive
 The submodules are `forge-std` (v1.16.1) and `openzeppelin-contracts` (v5.6.1),
 pinned in `.gitmodules`. They are not vendored into the repo; `lib/` is
 gitignored.
+
+## Build and test
+
+```bash
+make build      # forge build
+make test       # forge test -vvv
+make fmt-check  # forge fmt --check
+make snapshot   # forge snapshot (gas baseline)
+```
+
+or call forge directly:
+
+```bash
+forge build
+forge test
+forge fmt
+```
+
+## SDK
+
+```bash
+make sdk        # cd sdk && npm install && npm run build
+```
+
+or:
