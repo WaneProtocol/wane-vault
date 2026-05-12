@@ -50,3 +50,31 @@ make sdk        # cd sdk && npm install && npm run build
 ```
 
 or:
+
+```bash
+cd sdk
+npm install
+npm run lint    # tsc --noEmit
+npm run build   # tsc -> dist/
+```
+
+Keep `sdk/src/abi.ts` in sync with any change to the vault or factory function
+surface, since the SDK encodes calldata against it.
+
+## Layout
+
+| Path | Contents |
+|---|---|
+| `src/` | Solidity contracts |
+| `test/` | Foundry tests |
+| `script/` | deploy scripts |
+| `sdk/` | TypeScript SDK (`@wane/vault-sdk`) |
+| `examples/` | runnable TS snippets |
+| `docs/` | reference and guides |
+| `lib/` | submodules (gitignored) |
+
+## Conventions
+
+- Conventional commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`).
+- Run `forge fmt` before committing Solidity.
+- Update `CHANGELOG.md` under `## [Unreleased]` for any user-visible change.
