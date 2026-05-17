@@ -26,3 +26,31 @@ ERC-20 deposits are ordinary token transfers to the address. Wane screens only
 outbound actions, so inbound value always lands.
 
 ## 3. Create the vault
+
+```ts
+const existing = await wane.vaultOf(owner);
+if (existing === "0x0000000000000000000000000000000000000000") {
+  await wane.createVault();
+}
+```
+
+`createVault` is idempotent at the protocol level: a second call for an owner
+that already has a vault reverts with `VaultExists`. Guard with `vaultOf` to
+avoid the wasted gas.
+
+## 4. Configure the owner's policy
+
+The vault reads the owner's `WanePolicy` entry. If the owner has not enrolled,
+the policy returns allowed for everything (the vault is then a plain held-funds
+wallet with no screening). To turn protection on, the owner enrolls once:
+
+```bash
+cast send $POLICY \
+  "enroll(address,uint8,uint32,uint128,uint128,uint40)" \
+  $OWNER 15 0 0 0 0 \
+  --rpc-url base --private-key $PK
+```
+
+`blockKinds = 15` is `K_ALL` (address, call pattern, bytecode, semantic). The
+remaining args set sensitivity, per-tx cap, daily cap, and expiry. See the
+policy contract for the full scope surface.
