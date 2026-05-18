@@ -54,3 +54,28 @@ cast send $POLICY \
 `blockKinds = 15` is `K_ALL` (address, call pattern, bytecode, semantic). The
 remaining args set sensitivity, per-tx cap, daily cap, and expiry. See the
 policy contract for the full scope surface.
+
+## 5. Send through the screen
+
+Always dry-run first if you want to show the user a result before they spend gas:
+
+```ts
+const check = await wane.wouldAllow(vault, recipient, value);
+if (!check.allowed) {
+  // surface check.label, e.g. "antibody match"
+  return;
+}
+await wane.send(vault, recipient, value);
+```
+
+For ERC-20, use `sendToken` / `wouldAllowToken`. The vault decodes the recipient
+from the transfer calldata and screens it, so you do not need to screen the
+recipient yourself.
+
+## 6. Handle a blocked send
+
+On enforcement the vault reverts with `Blocked(target, reason)`. With viem you
+can decode it from the revert data:
+
+```ts
+import { decodeVaultError } from "@wane/vault-sdk";
