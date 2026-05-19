@@ -79,3 +79,33 @@ can decode it from the revert data:
 
 ```ts
 import { decodeVaultError } from "@wane/vault-sdk";
+
+try {
+  await wane.send(vault, recipient, value);
+} catch (err) {
+  // err.cause?.data carries the raw revert on a ContractFunctionRevertedError
+  const decoded = decodeVaultError(rawRevertData);
+  if (decoded) console.log(decoded.message);
+}
+```
+
+## 7. Withdraw
+
+The owner can always pull funds back to themselves, regardless of policy state:
+
+```ts
+await wane.withdrawETH(vault, amount);
+await wane.withdrawToken(vault, token, amount);
+```
+
+Withdrawals are not screened, because returning your own funds to yourself is
+always safe. This is also the escape hatch if a policy is misconfigured.
+
+## Common mistakes
+
+- Funding the EOA instead of the vault. Screening only applies to funds held in
+  the vault. Send deposits to `predictVault(owner)`.
+- Expecting a single global vault address. Each owner has their own.
+- Forgetting to enroll the policy. Without enrollment the vault does not screen.
+- Screening the token contract instead of the recipient for ERC-20. The vault
+  already decodes and screens the recipient; let it.
