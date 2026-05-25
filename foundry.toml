@@ -1,0 +1,39 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+solc = "0.8.27"
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+evm_version = "cancun"
+auto_detect_solc = false
+gas_reports = ["WaneVault", "WaneVaultFactory"]
+verbosity = 2
+fuzz = { runs = 256 }
+invariant = { runs = 32, depth = 64 }
+
+[profile.ci]
+fuzz = { runs = 1000 }
+invariant = { runs = 256, depth = 128 }
+verbosity = 3
+
+[fmt]
+line_length = 100
+tab_width = 4
+bracket_spacing = true
+int_types = "long"
+multiline_func_header = "params_first"
+quote_style = "double"
+number_underscore = "thousands"
+
+[rpc_endpoints]
+base = "${BASE_RPC_URL}"
+base_sepolia = "${BASE_SEPOLIA_RPC_URL}"
+mainnet = "${MAINNET_RPC_URL}"
+
+[etherscan]
+base = { key = "${BASESCAN_API_KEY}", chain = 8453 }
+base_sepolia = { key = "${BASESCAN_API_KEY}", chain = 84532 }
