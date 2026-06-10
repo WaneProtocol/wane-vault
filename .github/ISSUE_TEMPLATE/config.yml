@@ -1,0 +1,8 @@
+﻿blank_issues_enabled: false
+contact_links:
+  - name: Website
+    url: https://wane.network
+    about: Project overview and documentation
+  - name: Security disclosure
+    url: https://github.com/WaneProtocol/wane-vault/security/policy
+    about: Report vulnerabilities privately, not in a public issue
