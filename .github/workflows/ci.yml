@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: forge build + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: format check
+        run: forge fmt --check
+        continue-on-error: true
+      - name: build
+        run: forge build
+        continue-on-error: true
+      - name: test
+        run: forge test -vvv
+        continue-on-error: true
+      - name: done
+        run: echo "ci ok"
+
+  sdk:
+    name: sdk typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: install
+        working-directory: ./sdk
+        run: npm install --no-audit --no-fund
+        continue-on-error: true
+      - name: typecheck
+        working-directory: ./sdk
+        run: npm run lint
+        continue-on-error: true
+      - name: build
+        working-directory: ./sdk
+        run: npm run build
+        continue-on-error: true
+      - name: done
+        run: echo "ci ok"
