@@ -4,7 +4,7 @@ Drive the vault directly with `cast` (no SDK). All examples target Base mainnet;
 set `PK` to the owner key and the addresses to your own.
 
 ```bash
-export FACTORY=0x6640dd13F172c356f671d35ef76695792908e2a9
+export FACTORY=0x571Ac11310fb5d69D660C30f696a81e097Db8586
 export RPC=base
 ```
 

@@ -11,7 +11,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `WaneVaultFactory` deployed on Base mainnet at
-  `0x6640dd13F172c356f671d35ef76695792908e2a9`, wired to the live policy and
+  `0x571Ac11310fb5d69D660C30f696a81e097Db8586`, wired to the live policy and
   antibody registry.
 - `@wane/vault-sdk` (viem): `predictVault`, `createVault`, `send`, `sendToken`,
   `execute`, `executeBatch`, `withdrawETH`, `withdrawToken`, `wouldAllow`.

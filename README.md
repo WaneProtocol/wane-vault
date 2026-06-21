@@ -10,13 +10,15 @@
 <p align="center">
   <a href="https://wane.network"><img src="https://img.shields.io/badge/website-wane.network-4f7799?style=for-the-badge&labelColor=0a0a0a" alt="website" /></a>
   <a href="https://x.com/wanedotnetwork"><img src="https://img.shields.io/badge/follow-%40wanedotnetwork-7aa874?style=for-the-badge&labelColor=0a0a0a" alt="x" /></a>
-  <a href="https://basescan.org/address/0x6640dd13F172c356f671d35ef76695792908e2a9"><img src="https://img.shields.io/badge/factory-live%20on%20base-d8a657?style=for-the-badge&labelColor=0a0a0a" alt="deployment" /></a>
+  <a href="https://basescan.org/address/0x571Ac11310fb5d69D660C30f696a81e097Db8586"><img src="https://img.shields.io/badge/factory-live%20on%20base-d8a657?style=for-the-badge&labelColor=0a0a0a" alt="deployment" /></a>
   <a href="https://book.getfoundry.sh"><img src="https://img.shields.io/badge/built%20with-foundry-d8a657?style=for-the-badge&labelColor=0a0a0a" alt="foundry" /></a>
 </p>
 
 **WaneVault** is a non-custodial screening smart wallet on EVM. Funds (ETH and ERC-20) live inside the vault. Only the owner drives it, and every outbound action routed through `execute()` is screened against the owner's `WanePolicy` (plus the shared antibody registry the policy reads) before any value moves. A flagged target reverts before the transfer. The contract can only block, never divert: the sole exits are `execute()` (screened) and `withdraw()` (owner-only, back to the owner), so deposits are never trapped.
 
 This is the EVM counterpart of the Solana Wane session vault. It is stronger than a 7702 delegate guard: a 7702 guard only runs when the wallet routes a call through `execute()`, so a raw key-signed transaction bypasses it. Funds held in this vault have no such bypass.
+
+The owner can also issue a scoped session key for an agent. `setSession(key, expiry, perTxCap, dailyCap)` lets that key drive screened `execute()` sends within a per-transaction cap and a rolling daily cap until it expires, while `withdraw` stays owner-only. The owner keeps the master key and can `revokeSession()` at any time, so the agent never holds anything that can drain the vault.
 
 ## Features
 
@@ -27,6 +29,7 @@ This is the EVM counterpart of the Solana Wane session vault. It is stronger tha
 | Decode + screen the REAL ERC-20 recipient from calldata | stable |
 | Batch execute, atomic revert on any flagged action | stable |
 | Owner withdraw (funds never trapped) | stable |
+| Scoped agent session key: capped per-tx + daily, expiring, revocable, cannot withdraw | stable |
 | `wouldAllow` free dry-run of the screen | stable |
 | CREATE2 factory: predict + create per-owner vault | stable |
 | TypeScript SDK (`@wane/vault-sdk`, viem) | stable |
@@ -113,8 +116,8 @@ Drive the vault directly from cast:
 
 ```bash
 # predict + create
-cast call   0x6640dd13F172c356f671d35ef76695792908e2a9 "predict(address)(address)" $OWNER --rpc-url base
-cast send   0x6640dd13F172c356f671d35ef76695792908e2a9 "createVault()(address)" --rpc-url base --private-key $PK
+cast call   0x571Ac11310fb5d69D660C30f696a81e097Db8586 "predict(address)(address)" $OWNER --rpc-url base
+cast send   0x571Ac11310fb5d69D660C30f696a81e097Db8586 "createVault()(address)" --rpc-url base --private-key $PK
 
 # screened send from the vault
 cast send   $VAULT "execute(address,uint256,bytes)" $TO 100000000000000000 0x --rpc-url base --private-key $PK
@@ -126,7 +129,7 @@ These are real and verifiable on-chain. The factory mints per-owner vaults that 
 
 | Contract | Address | Explorer |
 |---|---|---|
-| WaneVaultFactory | `0x6640dd13F172c356f671d35ef76695792908e2a9` | [BaseScan](https://basescan.org/address/0x6640dd13F172c356f671d35ef76695792908e2a9) |
+| WaneVaultFactory | `0x571Ac11310fb5d69D660C30f696a81e097Db8586` | [BaseScan](https://basescan.org/address/0x571Ac11310fb5d69D660C30f696a81e097Db8586) |
 | WanePolicy (reused) | `0x26deE4503C7f67356837ED41cE285026EF256667` | [BaseScan](https://basescan.org/address/0x26deE4503C7f67356837ED41cE285026EF256667) |
 | WaneRegistry (reused) | `0x027F371fB139A57EcD2A2E175d30157eEA1C56de` | [BaseScan](https://basescan.org/address/0x027F371fB139A57EcD2A2E175d30157eEA1C56de) |
 

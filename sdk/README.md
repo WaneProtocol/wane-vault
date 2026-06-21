@@ -36,7 +36,7 @@ The full method table and reason-code reference are in
 
 Base mainnet (chain `8453`):
 
-- WaneVaultFactory: `0x6640dd13F172c356f671d35ef76695792908e2a9`
+- WaneVaultFactory: `0x571Ac11310fb5d69D660C30f696a81e097Db8586`
 - WanePolicy (reused): `0x26deE4503C7f67356837ED41cE285026EF256667`
 - WaneRegistry (reused): `0x027F371fB139A57EcD2A2E175d30157eEA1C56de`
 
