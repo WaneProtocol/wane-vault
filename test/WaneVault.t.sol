@@ -34,6 +34,7 @@ contract WaneVaultTest is Test {
     address owner = makeAddr("owner");
     address drainer = makeAddr("drainer");
     address friend = makeAddr("friend");
+    address agent = makeAddr("agent");
 
     function setUp() public {
         token = new WaneToken(treasury);
@@ -115,7 +116,7 @@ contract WaneVaultTest is Test {
     /* ── only the owner may drive the vault ──────────────────────────── */
 
     function test_OutsiderCannotExecute() public {
-        vm.expectRevert(WaneVault.NotOwner.selector);
+        vm.expectRevert(WaneVault.NotDriver.selector);
         vm.prank(makeAddr("attacker"));
         vault.execute(friend, 1 ether, "");
     }
@@ -163,5 +164,75 @@ contract WaneVaultTest is Test {
         assertTrue(okClean, "clean allowed");
         (bool okDrain,) = vault.wouldAllow(drainer, 1 ether, "");
         assertFalse(okDrain, "drainer blocked");
+    }
+
+    /* ── session key: owner grants a scoped agent key ────────────────── */
+
+    function _grant(uint64 expiry, uint128 perTx, uint128 daily) internal {
+        vm.prank(owner);
+        vault.setSession(agent, expiry, perTx, daily);
+    }
+
+    function test_SessionKeyCleanSend() public {
+        _grant(uint64(block.timestamp + 365 days), 0, 0);
+        uint256 before = friend.balance;
+        vm.prank(agent);
+        vault.execute(friend, 1 ether, "");
+        assertEq(friend.balance, before + 1 ether, "session key clean send went through");
+    }
+
+    function test_SessionKeyDrainerBlocked() public {
+        _grant(uint64(block.timestamp + 365 days), 0, 0);
+        vm.expectRevert(
+            abi.encodeWithSelector(WaneVault.Blocked.selector, drainer, pol.R_ANTIBODY())
+        );
+        vm.prank(agent);
+        vault.execute(drainer, 1 ether, "");
+    }
+
+    function test_SessionKeyOverPerTxCap() public {
+        _grant(uint64(block.timestamp + 365 days), 1 ether, 0);
+        vm.expectRevert(WaneVault.OverPerTxCap.selector);
+        vm.prank(agent);
+        vault.execute(friend, 2 ether, "");
+    }
+
+    function test_SessionKeyOverDailyCap() public {
+        _grant(uint64(block.timestamp + 365 days), 0, 1 ether);
+        vm.prank(agent);
+        vault.execute(friend, 0.6 ether, "");
+        vm.expectRevert(WaneVault.OverDailyCap.selector);
+        vm.prank(agent);
+        vault.execute(friend, 0.6 ether, "");
+    }
+
+    function test_SessionKeyExpired() public {
+        _grant(uint64(block.timestamp + 1 hours), 0, 0);
+        vm.warp(block.timestamp + 2 hours);
+        vm.expectRevert(WaneVault.SessionExpired.selector);
+        vm.prank(agent);
+        vault.execute(friend, 1 ether, "");
+    }
+
+    function test_SessionKeyCannotWithdraw() public {
+        _grant(uint64(block.timestamp + 365 days), 0, 0);
+        vm.expectRevert(WaneVault.NotOwner.selector);
+        vm.prank(agent);
+        vault.withdrawETH(1 ether);
+    }
+
+    function test_RevokedSessionCannotSend() public {
+        _grant(uint64(block.timestamp + 365 days), 0, 0);
+        vm.prank(owner);
+        vault.revokeSession();
+        vm.expectRevert(WaneVault.NotDriver.selector);
+        vm.prank(agent);
+        vault.execute(friend, 1 ether, "");
+    }
+
+    function test_OnlyOwnerSetsSession() public {
+        vm.expectRevert(WaneVault.NotOwner.selector);
+        vm.prank(agent);
+        vault.setSession(agent, uint64(block.timestamp + 1 days), 0, 0);
     }
 }
